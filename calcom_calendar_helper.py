@@ -45,18 +45,22 @@ class CalcomCalendarHelper:
         """Make authenticated request to Cal.com API."""
         url = f"{self.base_url}{endpoint}"
         headers = {
-            'Authorization': f'Bearer {self.api_token}',
             'Content-Type': 'application/json'
         }
+        
+        # Cal.com uses API key as query parameter, not Bearer token
+        if data is None:
+            data = {}
+        data['apiKey'] = self.api_token
         
         if method == 'GET':
             return requests.get(url, headers=headers, params=data)
         elif method == 'POST':
-            return requests.post(url, headers=headers, json=data)
+            return requests.post(url, headers=headers, params={'apiKey': self.api_token}, json=data)
         elif method == 'PUT':
-            return requests.put(url, headers=headers, json=data)
+            return requests.put(url, headers=headers, params={'apiKey': self.api_token}, json=data)
         elif method == 'DELETE':
-            return requests.delete(url, headers=headers)
+            return requests.delete(url, headers=headers, params={'apiKey': self.api_token})
         
         raise ValueError(f"Unsupported HTTP method: {method}")
     
