@@ -18,9 +18,9 @@ class SportsRentalNLU:
     def __init__(self):
         self.intent_patterns = {
             'pricing': [
-                r'\b(price|cost|rate|fee|charge|how much|pricing|expensive|cheap)\b',
+                r'\b(prices?|costs?|rates?|fees?|charges?|how much|pricing|expensive|cheap)\b',
                 r'\b(hourly|per hour|birthday party|package|membership)\b',
-                r'\b(what does it cost|how much does|price for)\b'
+                r'\b(what does it cost|how much does|price for|what are .* prices)\b'
             ],
             'availability': [
                 r'\b(available|availability|free|open|check|vacant)\b',
@@ -29,8 +29,8 @@ class SportsRentalNLU:
                 r'\b(when can|what times|is.*available)\b'
             ],
             'booking': [
-                r'\b(book|reserve|schedule|make a booking|rent|hire)\b',
-                r'\b(want to book|need to reserve|like to rent|book me)\b',
+                r'\b(book|reserve|schedule|make a booking|rent|hire|need)\b',
+                r'\b(want to book|need to reserve|like to rent|book me|I need|need a)\b',
                 r'\b(booking|reservation|appointment)\b',
                 r'\b(yes.*book|confirm.*booking|go ahead)\b'
             ],

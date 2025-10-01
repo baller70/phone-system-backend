@@ -217,15 +217,20 @@ Booking Details:
             """.strip()
             
             # Create booking payload (Cal.com API v1 format)
+            # Note: Cal.com requires a valid email format
+            booking_email = f'phone-booking-{datetime.now().strftime("%Y%m%d%H%M%S")}@sports-facility.com'
+            
             booking_data = {
                 'start': start_time,  # Required field, correct name
-                'eventTypeId': self.event_type_id or 1,
+                'eventTypeId': int(self.event_type_id) if self.event_type_id else 1,  # Ensure integer
                 'timeZone': self.facility_timezone,  # Correct camelCase
                 'language': 'en',  # Required field
+                'name': customer_name or 'Phone Customer',  # Add name at top level
+                'email': booking_email,  # Add email at top level
                 'responses': {
                     'name': customer_name or 'Phone Customer',
-                    'email': f'phone-booking-{datetime.now().strftime("%Y%m%d%H%M%S")}@facility.local',
-                    'phone': customer_phone,
+                    'email': booking_email,
+                    'phone': customer_phone or '',
                     'notes': booking_notes
                 },
                 'metadata': {
@@ -234,7 +239,8 @@ Booking Details:
                     'duration_hours': str(duration_hours),  # Convert to string
                     'total_cost': str(total_cost),  # Convert to string
                     'booking_source': 'phone_system',
-                    'booking_title': booking_title
+                    'booking_title': booking_title,
+                    'customer_phone': customer_phone or ''
                 }
             }
             
