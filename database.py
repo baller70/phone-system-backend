@@ -260,17 +260,29 @@ class DatabaseManager:
     def _run_postgres_migrations(self):
         """Run PostgreSQL migrations from schema file"""
         try:
-            schema_path = os.path.join(os.path.dirname(__file__), 'migrations', 'phase6_schema.sql')
+            # Run Phase 6 migrations
+            schema_path_6 = os.path.join(os.path.dirname(__file__), 'migrations', 'phase6_schema.sql')
             
-            if os.path.exists(schema_path):
-                with open(schema_path, 'r') as f:
+            if os.path.exists(schema_path_6):
+                with open(schema_path_6, 'r') as f:
                     schema = f.read()
                 
                 cursor = self._connection.cursor()
                 cursor.execute(schema)
-                logger.info("PostgreSQL migrations completed")
+                logger.info("PostgreSQL Phase 6 migrations completed")
             else:
-                logger.warning("PostgreSQL schema file not found")
+                logger.warning("PostgreSQL Phase 6 schema file not found")
+            
+            # Run Phase 7 migrations
+            schema_path_7 = os.path.join(os.path.dirname(__file__), 'migrations', 'phase7_schema.sql')
+            
+            if os.path.exists(schema_path_7):
+                with open(schema_path_7, 'r') as f:
+                    schema = f.read()
+                
+                cursor = self._connection.cursor()
+                cursor.execute(schema)
+                logger.info("PostgreSQL Phase 7 migrations completed")
                 
         except Exception as e:
             logger.error(f"PostgreSQL migration failed: {str(e)}")

@@ -1728,6 +1728,306 @@ def get_phase6_stats():
         logger.error(f"Error getting Phase 6 stats: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+# ==================== Phase 7: Enterprise Intelligence & Multi-Channel ====================
+
+# Multi-language translation
+@app.route('/api/translate', methods=['POST'])
+def translate_text():
+    """Translate text to target language"""
+    try:
+        data = request.get_json()
+        text = data.get('text')
+        target_language = data.get('target_language', 'en')
+        source_language = data.get('source_language')
+        
+        from localization.translator import get_translator_service
+        translator = get_translator_service()
+        
+        translated = translator.translate(text, target_language, source_language)
+        detected_language = translator.detect_language(text) if not source_language else source_language
+        
+        return jsonify({
+            'original': text,
+            'translated': translated,
+            'source_language': detected_language,
+            'target_language': target_language
+        })
+    except Exception as e:
+        logger.error(f"Error translating text: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/languages', methods=['GET'])
+def get_supported_languages():
+    """Get list of supported languages"""
+    try:
+        from localization.translator import get_translator_service
+        translator = get_translator_service()
+        
+        return jsonify({
+            'languages': translator.get_supported_languages()
+        })
+    except Exception as e:
+        logger.error(f"Error getting languages: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# Demand forecasting
+@app.route('/api/ml/demand-forecast', methods=['GET'])
+def get_demand_forecast():
+    """Get demand forecast for facilities"""
+    try:
+        facility_id = request.args.get('facility_id', type=int)
+        days_ahead = request.args.get('days_ahead', 30, type=int)
+        
+        from ml_models.demand_forecasting import get_demand_forecaster
+        forecaster = get_demand_forecaster(database._connection)
+        
+        forecast = forecaster.forecast_demand(facility_id=facility_id, days_ahead=days_ahead)
+        
+        return jsonify(forecast)
+    except Exception as e:
+        logger.error(f"Error getting demand forecast: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# Dynamic pricing
+@app.route('/api/ml/dynamic-pricing', methods=['POST'])
+def calculate_dynamic_price():
+    """Calculate dynamic price for a booking"""
+    try:
+        data = request.get_json()
+        facility_id = data.get('facility_id')
+        base_price = data.get('base_price')
+        date = data.get('date')
+        hour = data.get('hour')
+        customer_phone = data.get('customer_phone')
+        
+        from ml_models.dynamic_pricing import get_dynamic_pricing_engine
+        pricing_engine = get_dynamic_pricing_engine(database._connection)
+        
+        pricing = pricing_engine.calculate_dynamic_price(
+            facility_id=facility_id,
+            base_price=base_price,
+            date=date,
+            hour=hour,
+            customer_phone=customer_phone
+        )
+        
+        return jsonify(pricing)
+    except Exception as e:
+        logger.error(f"Error calculating dynamic price: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/ml/pricing-analytics', methods=['GET'])
+def get_pricing_analytics():
+    """Get pricing analytics"""
+    try:
+        days = request.args.get('days', 30, type=int)
+        
+        from ml_models.dynamic_pricing import get_dynamic_pricing_engine
+        pricing_engine = get_dynamic_pricing_engine(database._connection)
+        
+        analytics = pricing_engine.get_pricing_analytics(days=days)
+        
+        return jsonify(analytics)
+    except Exception as e:
+        logger.error(f"Error getting pricing analytics: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# WhatsApp integration
+@app.route('/api/whatsapp/send', methods=['POST'])
+def send_whatsapp_message():
+    """Send WhatsApp message to customer"""
+    try:
+        data = request.get_json()
+        to_number = data.get('to_number')
+        message = data.get('message')
+        
+        from multi_channel.whatsapp_handler import get_whatsapp_handler
+        whatsapp = get_whatsapp_handler()
+        
+        result = whatsapp.send_message(to_number, message)
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error sending WhatsApp message: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/whatsapp/webhook', methods=['POST'])
+def whatsapp_webhook():
+    """Handle incoming WhatsApp messages"""
+    try:
+        data = request.form
+        from_number = data.get('From', '')
+        message_body = data.get('Body', '')
+        
+        from multi_channel.whatsapp_handler import get_whatsapp_handler
+        whatsapp = get_whatsapp_handler()
+        
+        result = whatsapp.handle_incoming_message(from_number, message_body)
+        
+        logger.info(f"WhatsApp message from {from_number}: {message_body}")
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error handling WhatsApp webhook: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# SMS integration
+@app.route('/api/sms/send', methods=['POST'])
+def send_sms_message():
+    """Send SMS to customer"""
+    try:
+        data = request.get_json()
+        to_number = data.get('to_number')
+        message = data.get('message')
+        
+        from multi_channel.sms_handler import get_sms_handler
+        sms = get_sms_handler()
+        
+        result = sms.send_sms(to_number, message)
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error sending SMS: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/sms/webhook', methods=['POST'])
+def sms_webhook():
+    """Handle incoming SMS messages"""
+    try:
+        data = request.form
+        from_number = data.get('From', '')
+        message_body = data.get('Body', '')
+        
+        from multi_channel.sms_handler import get_sms_handler
+        sms = get_sms_handler()
+        
+        result = sms.handle_incoming_sms(from_number, message_body)
+        
+        logger.info(f"SMS from {from_number}: {message_body}")
+        
+        # If valid command, send reply
+        if result.get('status') == 'success' and 'reply' in result:
+            sms.send_sms(from_number, result['reply'])
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error handling SMS webhook: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# Advanced analytics
+@app.route('/api/analytics/dashboard', methods=['GET'])
+def get_advanced_analytics():
+    """Get comprehensive dashboard analytics"""
+    try:
+        days = request.args.get('days', 30, type=int)
+        
+        from analytics.advanced_dashboard import get_advanced_analytics
+        analytics = get_advanced_analytics(database._connection)
+        
+        metrics = analytics.get_dashboard_metrics(days=days)
+        
+        return jsonify(metrics)
+    except Exception as e:
+        logger.error(f"Error getting advanced analytics: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/analytics/revenue', methods=['GET'])
+def get_revenue_analytics():
+    """Get detailed revenue analytics"""
+    try:
+        days = request.args.get('days', 30, type=int)
+        
+        from analytics.advanced_dashboard import get_advanced_analytics
+        analytics = get_advanced_analytics(database._connection)
+        
+        metrics = analytics.get_dashboard_metrics(days=days)
+        
+        return jsonify(metrics.get('revenue', {}))
+    except Exception as e:
+        logger.error(f"Error getting revenue analytics: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/analytics/customers', methods=['GET'])
+def get_customer_analytics():
+    """Get customer analytics"""
+    try:
+        days = request.args.get('days', 30, type=int)
+        
+        from analytics.advanced_dashboard import get_advanced_analytics
+        analytics = get_advanced_analytics(database._connection)
+        
+        metrics = analytics.get_dashboard_metrics(days=days)
+        
+        return jsonify(metrics.get('customers', {}))
+    except Exception as e:
+        logger.error(f"Error getting customer analytics: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/analytics/facilities', methods=['GET'])
+def get_facility_analytics():
+    """Get facility utilization analytics"""
+    try:
+        days = request.args.get('days', 30, type=int)
+        
+        from analytics.advanced_dashboard import get_advanced_analytics
+        analytics = get_advanced_analytics(database._connection)
+        
+        metrics = analytics.get_dashboard_metrics(days=days)
+        
+        return jsonify(metrics.get('facilities', {}))
+    except Exception as e:
+        logger.error(f"Error getting facility analytics: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# Phase 7 statistics
+@app.route('/api/stats/phase7', methods=['GET'])
+def get_phase7_stats():
+    """Get Phase 7 feature statistics"""
+    try:
+        # Get counts from various Phase 7 tables
+        stats = {
+            'total_conversations': 0,
+            'whatsapp_conversations': 0,
+            'sms_conversations': 0,
+            'web_chat_conversations': 0,
+            'multi_language_bookings': 0,
+            'dynamic_pricing_active': True,
+            'forecast_accuracy': 0,
+            'saved_reports': 0
+        }
+        
+        # Conversations by channel
+        conv_query = "SELECT channel, COUNT(*) as count FROM conversations GROUP BY channel"
+        conv_results = database.fetchall(conv_query)
+        if conv_results:
+            for row in conv_results:
+                channel = row[0] if isinstance(row, tuple) else row['channel']
+                count = row[1] if isinstance(row, tuple) else row['count']
+                stats['total_conversations'] += count
+                if channel == 'whatsapp':
+                    stats['whatsapp_conversations'] = count
+                elif channel == 'sms':
+                    stats['sms_conversations'] = count
+                elif channel == 'web_chat':
+                    stats['web_chat_conversations'] = count
+        
+        # Multi-language bookings
+        lang_query = "SELECT COUNT(*) FROM bookings WHERE language != 'en'"
+        lang_result = database.fetchone(lang_query)
+        if lang_result:
+            stats['multi_language_bookings'] = lang_result[0] if isinstance(lang_result, tuple) else lang_result['count']
+        
+        # Saved reports
+        reports_query = "SELECT COUNT(*) FROM saved_reports"
+        reports_result = database.fetchone(reports_query)
+        if reports_result:
+            stats['saved_reports'] = reports_result[0] if isinstance(reports_result, tuple) else reports_result['count']
+        
+        return jsonify(stats)
+    except Exception as e:
+        logger.error(f"Error getting Phase 7 stats: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     debug = os.getenv('FLASK_ENV') == 'development'
