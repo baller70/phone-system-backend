@@ -26,7 +26,10 @@ class PricingEngine:
     def _load_pricing_data(self) -> Optional[pd.DataFrame]:
         """Load pricing data from CSV file."""
         try:
-            csv_path = '/home/ubuntu/sports_facility_pricing_data.csv'
+            # Use relative path that works both locally and on Render
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            csv_path = os.path.join(base_dir, 'sports_facility_pricing_data.csv')
+            
             if os.path.exists(csv_path):
                 return pd.read_csv(csv_path)
             else:
