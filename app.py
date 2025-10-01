@@ -61,21 +61,14 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Configure CORS to allow credentials and specific origins
-dashboard_origins = [
-    'http://localhost:3000',
-    'https://phone-system-dashboard.vercel.app',
-    'https://*.vercel.app',
-    'https://*.replit.dev',
-    'https://*.reai.io',
-]
-
+# Configure CORS to allow all origins for now (can restrict later in production)
+# This is needed for the preview URLs and development
 CORS(app, 
      resources={r"/*": {
-         "origins": dashboard_origins,
+         "origins": "*",
          "allow_headers": ["Content-Type", "Authorization", "X-API-Key"],
          "expose_headers": ["Content-Type", "Authorization"],
-         "supports_credentials": True,
+         "supports_credentials": False,  # Can't use credentials with wildcard origin
          "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
      }})
 
@@ -85,7 +78,6 @@ def after_request(response):
     origin = request.headers.get('Origin')
     if origin:
         response.headers['Access-Control-Allow-Origin'] = origin
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-API-Key'
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
     return response
