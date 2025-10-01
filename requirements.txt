@@ -6,6 +6,13 @@ pandas==2.3.3
 python-dotenv==1.1.1
 pytz==2025.2
 
+# Phase 5: Foundation & Essential Intelligence
+redis==5.0.1
+twilio==9.0.4
+textblob==0.17.1
+cryptography==41.0.7
+prometheus-client==0.19.0
+
 # Legacy Google Calendar dependencies (optional - only needed if reverting to Google Calendar)
 # google-api-python-client==2.183.0
 # google-auth-httplib2==0.2.0

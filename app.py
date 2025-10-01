@@ -2,18 +2,40 @@
 """
 Main Flask application for automated phone answering system.
 Handles Vonage Voice API webhooks and orchestrates call flow.
+
+PHASE 5 ENHANCEMENTS:
+- Call Recording & Transcription
+- SMS Confirmations
+- Sentiment Analysis
+- Conversation Memory
+- Business Hours Intelligence
+- Emergency Handling
+- Intent Confidence Scoring
+- Competitor Mention Detection
+- Live Call Monitoring
+- AI Performance Scoring
+- Real-Time Metrics
 """
 
 import os
 import json
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from dotenv import load_dotenv
 from vonage import Vonage, Auth
 from nlu import SportsRentalNLU
 from calcom_calendar_helper import CalcomCalendarHelper
 from pricing import PricingEngine
 from escalation import EscalationHandler
+
+# Phase 5: Import new services
+from integrations.sms_service import sms_service
+from integrations.call_recording import call_recording_service
+from integrations.transcription_service import transcription_service
+from intelligence.sentiment_analyzer import sentiment_analyzer
+from intelligence.conversation_memory import conversation_memory
+from monitoring.metrics import metrics_service
+from monitoring.health_checks import health_check_service
 
 # Load environment variables
 load_dotenv()
@@ -28,6 +50,11 @@ nlu = SportsRentalNLU()
 calendar_helper = CalcomCalendarHelper()
 pricing_engine = PricingEngine()
 escalation_handler = EscalationHandler()
+
+print("✓ Phase 5 services initialized:")
+print(f"  - SMS Service: {'Enabled' if sms_service.enabled else 'Disabled'}")
+print(f"  - Call Recording: {'Enabled' if call_recording_service.recording_enabled else 'Disabled'}")
+print(f"  - Conversation Memory: {'Enabled (Redis)' if conversation_memory.redis_available else 'Enabled (In-Memory)'}")
 
 # Initialize Vonage client
 try:
@@ -77,12 +104,33 @@ def answer_call():
         conversation_uuid = call_data.get('conversation_uuid', '')
         from_number = call_data.get('from', '')
         
+        # PHASE 5: Record call start metrics
+        metrics_service.record_call_start()
+        
+        # PHASE 5: Start call recording
+        recording_info = call_recording_service.start_recording(
+            conversation_uuid,
+            from_number
+        )
+        
+        # PHASE 5: Check conversation memory for returning customers
+        is_returning = conversation_memory.is_returning_customer(from_number)
+        customer_preferences = None
+        
+        if is_returning:
+            customer_preferences = conversation_memory.get_customer_preferences(from_number)
+            print(f"✨ Returning customer detected: {from_number}")
+            print(f"   Preferences: {customer_preferences}")
+        
         # Initialize session with complete structure
         call_sessions[conversation_uuid] = {
             'from_number': from_number,
             'state': 'greeting',
             'context': {},
             'start_time': datetime.now(),
+            'is_returning_customer': is_returning,
+            'customer_preferences': customer_preferences,
+            'recording_info': recording_info,
             'booking_info': {
                 # Facility details
                 'facility_type': None,
@@ -106,13 +154,34 @@ def answer_call():
             'clarification_attempts': 0
         }
         
-        # Check business hours
+        # PHASE 5: Enhanced business hours intelligence
         current_hour = datetime.now().hour
+        current_weekday = datetime.now().weekday()  # 0=Monday, 6=Sunday
+        
+        # Check if outside business hours
         if current_hour < BUSINESS_HOURS['start'] or current_hour >= BUSINESS_HOURS['end']:
+            metrics_service.record_call_end(
+                (datetime.now() - call_sessions[conversation_uuid]['start_time']).total_seconds(),
+                'after_hours'
+            )
             return jsonify(create_after_hours_ncco())
         
-        # Create greeting NCCO
-        ncco = create_greeting_ncco()
+        # Check if weekend (optional - adjust based on business needs)
+        # if current_weekday >= 5:  # Saturday or Sunday
+        #     return jsonify(create_weekend_hours_ncco())
+        
+        # PHASE 5: Personalized greeting for returning customers
+        if is_returning and customer_preferences:
+            ncco = create_returning_customer_greeting_ncco(customer_preferences)
+            # Extract greeting text for transcription
+            greeting_text = ncco[0]['text']
+        else:
+            ncco = create_greeting_ncco()
+            greeting_text = ncco[0]['text']
+        
+        # Save greeting to transcription
+        save_ai_response_to_transcription(conversation_uuid, greeting_text)
+        
         return jsonify(ncco)
         
     except Exception as e:
@@ -121,7 +190,7 @@ def answer_call():
 
 @app.route('/webhooks/events', methods=['GET', 'POST'])
 def handle_events():
-    """Handle Vonage Voice API events."""
+    """PHASE 5: Enhanced event handling with metrics and cleanup."""
     try:
         # Handle both GET and POST requests from Vonage
         if request.method == 'POST':
@@ -130,9 +199,49 @@ def handle_events():
             event_data = request.args.to_dict()
         
         print(f"Received event: {event_data}")
+        
+        # PHASE 5: Handle call completion
+        conversation_uuid = event_data.get('conversation_uuid')
+        event_status = event_data.get('status', '')
+        
+        if conversation_uuid and event_status in ['completed', 'failed', 'unanswered', 'busy', 'cancelled']:
+            # Get session if exists
+            session = call_sessions.get(conversation_uuid)
+            
+            if session:
+                # Calculate call duration
+                start_time = session.get('start_time')
+                if start_time:
+                    duration = (datetime.now() - start_time).total_seconds()
+                    metrics_service.record_call_end(duration, event_status)
+                
+                # Stop recording
+                recording_url = event_data.get('recording_url')
+                call_recording_service.stop_recording(conversation_uuid, recording_url)
+                
+                # Log final call summary
+                print(f"📞 Call Summary for {conversation_uuid}:")
+                print(f"   Duration: {duration:.1f}s")
+                print(f"   Status: {event_status}")
+                print(f"   Returning Customer: {session.get('is_returning_customer', False)}")
+                print(f"   Final State: {session.get('conversation_state', 'unknown')}")
+                
+                # Save final transcription entry
+                transcription_service.save_transcription(
+                    conversation_uuid,
+                    'system',
+                    f"Call ended: {event_status}"
+                )
+                
+                # Clean up session after some delay (keep for analytics)
+                # In production, you might want to store this in a database instead
+                # del call_sessions[conversation_uuid]
+        
         return jsonify({'status': 'ok'})
     except Exception as e:
         print(f"Error handling event: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'status': 'error'})
 
 @app.route('/webhooks/fallback', methods=['GET', 'POST'])
@@ -207,10 +316,62 @@ def handle_speech():
         
         session = call_sessions[conversation_uuid]
         
+        # PHASE 5: Save transcription
+        transcription_service.save_transcription(
+            conversation_uuid,
+            'user',
+            speech_text
+        )
+        
+        # PHASE 5: Sentiment analysis
+        sentiment_result = sentiment_analyzer.analyze_sentiment(speech_text)
+        session['last_sentiment'] = sentiment_result
+        metrics_service.record_sentiment(sentiment_result['sentiment'])
+        
+        print(f"Sentiment: {sentiment_result['sentiment']}, Emotion: {sentiment_result['emotion']}")
+        
+        # PHASE 5: Emergency handling
+        if sentiment_result['is_urgent'] or 'emergency' in speech_text.lower():
+            print("⚠️ URGENT REQUEST DETECTED - Prioritizing escalation")
+            session['urgency_level'] = 'high'
+        
+        # PHASE 5: Competitor mention detection
+        competitor_keywords = ['competitor', 'other gym', 'other facility', 'elsewhere']
+        if any(keyword in speech_text.lower() for keyword in competitor_keywords):
+            print("🔔 Competitor mentioned in conversation")
+            session['competitor_mentioned'] = True
+        
+        # PHASE 5: Check if escalation needed due to sentiment
+        if sentiment_analyzer.should_escalate(sentiment_result):
+            print("🚨 Escalating due to negative sentiment")
+            return jsonify(create_escalation_ncco(
+                "I understand you're frustrated. Let me transfer you to a manager who can help you better.",
+                sentiment_result['emotion']
+            ))
+        
         # Process speech with NLU
         nlu_result = nlu.process_speech_input(speech_text, session['context'])
         
-        print(f"NLU result: {nlu_result}")
+        # PHASE 5: Intent confidence scoring
+        intent_confidence = nlu_result.get('confidence', 0.0)
+        metrics_service.record_ai_response(
+            nlu_result.get('intent', 'unknown'),
+            intent_confidence
+        )
+        
+        print(f"NLU result: {nlu_result}, Confidence: {intent_confidence}")
+        
+        # PHASE 5: Low confidence handling
+        if intent_confidence < 0.5 and nlu_result.get('intent') not in ['unknown', 'clarification']:
+            print(f"⚠️ Low confidence ({intent_confidence}) - Requesting clarification")
+            session['clarification_attempts'] = session.get('clarification_attempts', 0) + 1
+            
+            if session['clarification_attempts'] >= 3:
+                # After 3 failed attempts, offer escalation
+                return jsonify(create_speech_input_ncco(
+                    "I'm having trouble understanding your request. Would you like me to transfer you to someone who can help you directly?",
+                    'escalation_offer'
+                ))
         
         # Update session context
         session['context'].update(nlu_result.get('entities', {}))
@@ -605,11 +766,45 @@ def process_confirmed_booking(booking_info, session):
             except:
                 formatted_time = booking_info['start_time']
             
+            # PHASE 5: Send SMS confirmation
+            if booking_info.get('customer_phone'):
+                sms_details = {
+                    'facility': facility_name,
+                    'date': formatted_date,
+                    'time': formatted_time,
+                    'duration': f"{booking_info['duration_hours']} hour{'s' if booking_info['duration_hours'] > 1 else ''}",
+                    'price': booking_info['price'],
+                    'booking_id': booking_id
+                }
+                sms_sent = sms_service.send_booking_confirmation(
+                    booking_info['customer_phone'],
+                    sms_details
+                )
+                print(f"📱 SMS confirmation {'sent' if sms_sent else 'failed'}")
+            
+            # PHASE 5: Update conversation memory
+            booking_history = {
+                'booking_id': booking_id,
+                'facility': booking_info['facility_type'],
+                'date': booking_info['date'],
+                'time': booking_info['start_time'],
+                'duration': booking_info['duration_hours'],
+                'price': booking_info['price']
+            }
+            conversation_memory.update_booking_history(
+                booking_info['customer_phone'],
+                booking_history
+            )
+            print(f"💾 Conversation memory updated")
+            
+            # PHASE 5: Record successful booking metrics
+            metrics_service.record_booking('success', float(booking_info['price']))
+            
             response_text = f"""Perfect! I've confirmed your booking for {facility_name} on {formatted_date} at {formatted_time} for {booking_info['duration_hours']} hour{'s' if booking_info['duration_hours'] > 1 else ''}.
 
 Your booking reference number is {booking_id}.
 
-I'll send a confirmation email to {booking_info['customer_email']} with all the details.
+You'll receive a confirmation text message and email with all the details.
 
 Is there anything else I can help you with?"""
             
@@ -925,8 +1120,22 @@ def handle_modification_cancellation_flow(user_input, entities, session):
     response_text = "I'm not sure how to help with that. Would you like to modify a booking or cancel it?"
     return create_speech_input_ncco(response_text, 'modification_fallback')
 
+def save_ai_response_to_transcription(conversation_uuid, response_text):
+    """PHASE 5: Helper to save AI responses to transcription."""
+    if conversation_uuid:
+        transcription_service.save_transcription(
+            conversation_uuid,
+            'ai',
+            response_text
+        )
+
 def create_greeting_ncco():
     """Create initial greeting NCCO with sequential talk then input."""
+    greeting_text = "Hello! Thank you for calling our sports facility. I'm here to help you with court rentals, birthday parties, and availability. How can I assist you today?"
+    
+    # Save to transcription (will be called with conversation_uuid)
+    # This is handled in the answer_call function
+    
     return [
         {
             "action": "talk",
@@ -945,6 +1154,58 @@ def create_greeting_ncco():
                 "startTimeout": 10,
                 "maxDuration": 15
             }
+        }
+    ]
+
+def create_returning_customer_greeting_ncco(customer_preferences):
+    """PHASE 5: Personalized greeting for returning customers."""
+    favorite_facility = customer_preferences.get('favorite_facility', '').replace('_', ' ').title()
+    
+    if favorite_facility:
+        greeting_text = f"Welcome back! I see you've booked our {favorite_facility} before. Are you looking to make another booking today?"
+    else:
+        greeting_text = "Welcome back! It's great to hear from you again. How can I help you today?"
+    
+    return [
+        {
+            "action": "talk",
+            "text": greeting_text,
+            "voiceName": "Amy",
+            "bargeIn": False
+        },
+        {
+            "action": "input",
+            "eventUrl": [f"{BASE_URL}/webhooks/speech"],
+            "type": ["speech"],
+            "speech": {
+                "endOnSilence": 3,
+                "language": "en-US",
+                "context": ["sports", "basketball", "booking", "rental", "party", "yes", "no"],
+                "startTimeout": 10,
+                "maxDuration": 15
+            }
+        }
+    ]
+
+def create_escalation_ncco(message, reason):
+    """PHASE 5: Create NCCO for sentiment-based escalation."""
+    metrics_service.record_escalation(reason)
+    
+    return [
+        {
+            "action": "talk",
+            "text": message,
+            "voiceName": "Amy",
+            "bargeIn": False
+        },
+        {
+            "action": "connect",
+            "endpoint": [
+                {
+                    "type": "phone",
+                    "number": os.getenv('STAFF_PHONE_NUMBER', '15551234567')
+                }
+            ]
         }
     ]
 
@@ -1035,12 +1296,79 @@ def create_clarification_ncco():
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint."""
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'vonage_client': vonage_client is not None
-    })
+    """PHASE 5: Enhanced health check endpoint."""
+    health_status = health_check_service.get_system_health()
+    health_status['vonage_client'] = vonage_client is not None
+    
+    # Return appropriate HTTP status code
+    status_code = 200
+    if health_status['status'] == 'unhealthy':
+        status_code = 503
+    elif health_status['status'] == 'degraded':
+        status_code = 200  # Still functional
+    
+    return jsonify(health_status), status_code
+
+@app.route('/metrics', methods=['GET'])
+def get_metrics():
+    """PHASE 5: Prometheus metrics endpoint."""
+    return Response(
+        metrics_service.get_metrics(),
+        mimetype=metrics_service.get_content_type()
+    )
+
+@app.route('/api/transcription/<conversation_uuid>', methods=['GET'])
+def get_call_transcription(conversation_uuid):
+    """PHASE 5: Get full transcription for a call."""
+    try:
+        transcription = transcription_service.get_transcription(conversation_uuid)
+        conversation_text = transcription_service.get_full_conversation_text(conversation_uuid)
+        
+        return jsonify({
+            'conversation_uuid': conversation_uuid,
+            'transcription': transcription,
+            'full_text': conversation_text
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/call-sessions', methods=['GET'])
+def get_active_sessions():
+    """PHASE 5: Get currently active call sessions (for live monitoring)."""
+    try:
+        active_sessions = []
+        for uuid, session in call_sessions.items():
+            active_sessions.append({
+                'conversation_uuid': uuid,
+                'from_number': session.get('from_number'),
+                'state': session.get('conversation_state'),
+                'start_time': session.get('start_time').isoformat() if session.get('start_time') else None,
+                'is_returning_customer': session.get('is_returning_customer', False),
+                'sentiment': session.get('last_sentiment', {}).get('sentiment', 'unknown')
+            })
+        
+        return jsonify({
+            'active_calls': len(active_sessions),
+            'sessions': active_sessions
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/call-recording/<conversation_uuid>', methods=['GET'])
+def get_call_recording(conversation_uuid):
+    """PHASE 5: Get recording URL for a call."""
+    try:
+        recording_url = call_recording_service.get_recording_url(conversation_uuid)
+        
+        if recording_url:
+            return jsonify({
+                'conversation_uuid': conversation_uuid,
+                'recording_url': recording_url
+            })
+        else:
+            return jsonify({'error': 'Recording not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
