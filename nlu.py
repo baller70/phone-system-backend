@@ -2,12 +2,16 @@
 """
 Natural Language Understanding module for processing speech input.
 Identifies caller intent and extracts relevant entities.
+Phase 3: Enhanced with better date/time parsing, fuzzy matching, and modification/cancellation support
 """
 
 import re
 from datetime import datetime, timedelta, time
 from typing import Dict, Any, List, Optional
 import calendar
+from dateutil import parser as date_parser
+from dateutil.relativedelta import relativedelta
+from difflib import get_close_matches
 
 class SportsRentalNLU:
     """
@@ -33,6 +37,26 @@ class SportsRentalNLU:
                 r'\b(want to book|need to reserve|like to rent|book me|I need|need a)\b',
                 r'\b(booking|reservation|appointment)\b',
                 r'\b(yes.*book|confirm.*booking|go ahead)\b'
+            ],
+            'modify_booking': [
+                r'\b(change|modify|reschedule|move|update|alter)\b',
+                r'\b(different time|another time|new time|switch)\b',
+                r'\b(change.*booking|modify.*reservation|reschedule.*appointment)\b'
+            ],
+            'cancel_booking': [
+                r'\b(cancel|cancellation|cancelling)\b',
+                r'\b(don\'t need|won\'t make it|not coming|can\'t make)\b',
+                r'\b(cancel.*booking|cancel.*reservation|cancel.*appointment)\b'
+            ],
+            'lookup_booking': [
+                r'\b(my booking|my reservation|booking reference|confirmation number)\b',
+                r'\b(check.*booking|find.*booking|look.*up)\b',
+                r'\b(what.*time|when.*booking)\b'
+            ],
+            'escalate_to_human': [
+                r'\b(speak to|talk to|connect me|transfer me)\b',
+                r'\b(human|person|representative|agent|manager|someone)\b',
+                r'\b(real person|actual person|not.*robot)\b'
             ],
             'general_info': [
                 r'\b(hours|location|address|information|about|services)\b',
@@ -175,7 +199,7 @@ class SportsRentalNLU:
         """Extract entities from speech text."""
         entities = {}
         
-        # Extract service type
+        # Extract service type (now with fuzzy matching)
         service_type = self._extract_service_type(speech_text)
         if service_type:
             entities['service_type'] = service_type
@@ -208,14 +232,29 @@ class SportsRentalNLU:
         if phone:
             entities['phone'] = phone
         
+        # Extract booking reference (Phase 3)
+        booking_ref = self.extract_booking_reference(speech_text)
+        if booking_ref:
+            entities['booking_reference'] = booking_ref
+        
         return entities
     
     def _extract_service_type(self, speech_text: str) -> Optional[str]:
-        """Extract service type from speech."""
+        """
+        Extract service type from speech with fuzzy matching.
+        Phase 3: Enhanced to handle typos and variations.
+        """
+        # First try pattern matching
         for service_type, patterns in self.service_type_patterns.items():
             for pattern in patterns:
                 if re.search(pattern, speech_text, re.IGNORECASE):
                     return service_type
+        
+        # Then try fuzzy matching (Phase 3 enhancement)
+        fuzzy_match = self.match_facility_fuzzy(speech_text)
+        if fuzzy_match:
+            return fuzzy_match
+        
         return None
     
     def _extract_time_info(self, speech_text: str) -> Dict[str, Any]:
@@ -300,6 +339,11 @@ class SportsRentalNLU:
                 hour = 0
             
             time_info['specific_time'] = f"{hour:02d}:{minute:02d}"
+        elif not time_info.get('specific_time'):
+            # Phase 3: Try conversational time parsing
+            conv_time = self.parse_conversational_time(speech_text)
+            if conv_time:
+                time_info['specific_time'] = conv_time
         
         # Convert relative references to actual datetime
         if 'specific_date' in time_info:
@@ -419,6 +463,168 @@ class SportsRentalNLU:
                 target_date = target_date.replace(hour=15, minute=0, second=0, microsecond=0)
         
         return target_date.strftime('%Y-%m-%d %H:%M')
+    
+    def parse_relative_date(self, text: str) -> Optional[str]:
+        """
+        Parse relative dates like 'next Tuesday', 'in 2 weeks', etc.
+        Phase 3 enhancement for better date understanding.
+        """
+        text_lower = text.lower()
+        today = datetime.now().date()
+        
+        # Today/Tomorrow/Yesterday
+        if 'today' in text_lower:
+            return today.strftime('%Y-%m-%d')
+        elif 'tomorrow' in text_lower:
+            return (today + timedelta(days=1)).strftime('%Y-%m-%d')
+        elif 'yesterday' in text_lower:
+            return (today - timedelta(days=1)).strftime('%Y-%m-%d')
+        
+        # Day of week patterns
+        days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+        
+        for i, day in enumerate(days):
+            if day in text_lower:
+                # Calculate next occurrence of this day
+                current_weekday = today.weekday()
+                target_weekday = i
+                
+                if 'next' in text_lower:
+                    # Next week's occurrence
+                    days_ahead = (target_weekday - current_weekday + 7) % 7
+                    if days_ahead == 0:
+                        days_ahead = 7
+                    result_date = today + timedelta(days=days_ahead + 7)
+                else:
+                    # This week's occurrence (or next week if it's passed)
+                    days_ahead = (target_weekday - current_weekday) % 7
+                    if days_ahead == 0 and datetime.now().hour > 18:  # After 6pm
+                        days_ahead = 7
+                    result_date = today + timedelta(days=days_ahead)
+                
+                return result_date.strftime('%Y-%m-%d')
+        
+        # "in X days/weeks/months"
+        if 'in' in text_lower:
+            # Extract number
+            numbers = re.findall(r'\d+', text)
+            if numbers:
+                num = int(numbers[0])
+                
+                if 'day' in text_lower:
+                    return (today + timedelta(days=num)).strftime('%Y-%m-%d')
+                elif 'week' in text_lower:
+                    return (today + timedelta(weeks=num)).strftime('%Y-%m-%d')
+                elif 'month' in text_lower:
+                    result_date = today + relativedelta(months=num)
+                    return result_date.strftime('%Y-%m-%d')
+        
+        # Try dateutil parser as fallback
+        try:
+            parsed = date_parser.parse(text, fuzzy=True)
+            return parsed.date().strftime('%Y-%m-%d')
+        except:
+            pass
+        
+        return None
+    
+    def parse_conversational_time(self, text: str) -> Optional[str]:
+        """
+        Parse conversational time expressions like 'morning', 'afternoon'.
+        Phase 3 enhancement for better time understanding.
+        """
+        text_lower = text.lower()
+        
+        # Time of day keywords
+        time_mappings = {
+            'early morning': '07:00',
+            'morning': '09:00',
+            'mid morning': '10:00',
+            'late morning': '11:00',
+            'noon': '12:00',
+            'midday': '12:00',
+            'early afternoon': '13:00',
+            'afternoon': '14:00',
+            'mid afternoon': '15:00',
+            'late afternoon': '16:00',
+            'early evening': '17:00',
+            'evening': '18:00',
+            'late evening': '20:00',
+            'night': '19:00',
+        }
+        
+        for phrase, time_value in time_mappings.items():
+            if phrase in text_lower:
+                return time_value
+        
+        return None
+    
+    def extract_booking_reference(self, text: str) -> Optional[str]:
+        """
+        Extract booking reference number from text.
+        Phase 3 enhancement for modification/cancellation support.
+        """
+        # Look for patterns like: #12345, booking 12345, reference 12345
+        patterns = [
+            r'#([A-Z0-9]{4,})',
+            r'booking\s+(?:number\s+)?([A-Z0-9]{4,})',
+            r'reference\s+(?:number\s+)?([A-Z0-9]{4,})',
+            r'confirmation\s+(?:number\s+)?([A-Z0-9]{4,})',
+            r'\b([A-Z0-9]{6,8})\b',  # Any 6-8 character alphanumeric
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1).upper()
+        
+        return None
+    
+    def get_facility_variants(self) -> Dict[str, List[str]]:
+        """Return dictionary of facility types and their variants for fuzzy matching."""
+        return {
+            'basketball': ['basketball', 'basketball court', 'b-ball', 'hoops', 'court', 'bball'],
+            'tennis': ['tennis', 'tennis court'],
+            'soccer': ['soccer', 'soccer field', 'football', 'football field', 'pitch'],
+            'volleyball': ['volleyball', 'volleyball court', 'v-ball', 'vball'],
+            'badminton': ['badminton', 'badminton court'],
+            'pool': ['pool', 'swimming pool', 'swim'],
+            'gym': ['gym', 'fitness', 'weight room'],
+            'birthday_party': ['birthday', 'party', 'birthday party', 'celebration'],
+            'multi_sport': ['multi sport', 'multisport', 'mixed sports', 'activities'],
+        }
+    
+    def match_facility_fuzzy(self, text: str) -> Optional[str]:
+        """
+        Match facility type with fuzzy matching to handle typos.
+        Phase 3 enhancement for more robust facility extraction.
+        """
+        text_lower = text.lower()
+        variants = self.get_facility_variants()
+        
+        # First, try exact matching
+        for facility, variant_list in variants.items():
+            for variant in variant_list:
+                if variant in text_lower:
+                    return facility
+        
+        # Then try fuzzy matching
+        all_variants = []
+        for facility, variant_list in variants.items():
+            all_variants.extend([(v, facility) for v in variant_list])
+        
+        # Extract potential facility words from text
+        words = text_lower.split()
+        for word in words:
+            if len(word) > 3:  # Only check words longer than 3 chars
+                matches = get_close_matches(word, [v[0] for v in all_variants], n=1, cutoff=0.75)
+                if matches:
+                    # Find which facility this belongs to
+                    for variant, facility in all_variants:
+                        if variant == matches[0]:
+                            return facility
+        
+        return None
 
 # Example usage and testing
 if __name__ == "__main__":

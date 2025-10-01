@@ -215,8 +215,17 @@ def handle_speech():
         # Update session context
         session['context'].update(nlu_result.get('entities', {}))
         
-        # Generate response based on intent
-        ncco = handle_intent(nlu_result, session)
+        # Phase 3: Check if we're in modification/cancellation flow
+        if session.get('modification_state') and session.get('modification_state') != 'completed':
+            # Continue modification/cancellation flow
+            ncco = handle_modification_cancellation_flow(
+                user_input=speech_text,
+                entities=nlu_result.get('entities', {}),
+                session=session
+            )
+        else:
+            # Generate response based on intent
+            ncco = handle_intent(nlu_result, session)
         
         return jsonify(ncco)
         
@@ -383,6 +392,12 @@ def handle_intent(nlu_result, session):
         return handle_availability_inquiry(entities, session)
     elif intent == 'booking':
         return handle_booking_request(entities, session)
+    elif intent == 'modify_booking' or intent == 'cancel_booking' or intent == 'lookup_booking':
+        # Phase 3: Route to modification/cancellation handler
+        return handle_modification_cancellation_flow(user_input='', entities=entities, session=session)
+    elif intent == 'escalate_to_human':
+        # Phase 3: Handle explicit escalation requests
+        return escalation_handler.create_escalation_ncco('user_requested', entities)
     elif intent == 'general_info':
         return handle_general_info(entities, session)
     elif intent == 'payment_issue' or intent == 'complex_booking':
@@ -665,6 +680,250 @@ def handle_general_info(entities, session):
     
     response_text += " Would you like to hear about pricing or check availability?"
     return create_speech_input_ncco(response_text, 'general_followup')
+
+def handle_modification_cancellation_flow(user_input, entities, session):
+    """
+    Handle booking modification and cancellation requests.
+    Phase 3: Comprehensive modification and cancellation support.
+    """
+    mod_state = session.get('modification_state', 'lookup')
+    intent = entities.get('intent', '')
+    
+    print(f"🔄 MODIFICATION/CANCELLATION FLOW")
+    print(f"   State: {mod_state}")
+    print(f"   Intent: {intent}")
+    print(f"   Entities: {entities}")
+    
+    # State 1: Look up the booking
+    if mod_state == 'lookup':
+        # Try to extract booking reference
+        booking_ref = entities.get('booking_reference')
+        email = entities.get('email')
+        
+        if booking_ref:
+            # Look up by booking reference
+            result = calendar_helper.lookup_booking_by_id(booking_ref)
+            
+            if result['success']:
+                booking = result['booking']
+                session['modification_booking'] = booking
+                session['modification_state'] = 'verify'
+                
+                # Extract attendee info
+                attendees = booking.get('attendees', [])
+                attendee_name = attendees[0].get('name', 'Customer') if attendees else 'Customer'
+                start_time = booking.get('startTime', '')
+                
+                # Format the time nicely
+                try:
+                    booking_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00')).replace(tzinfo=None)
+                    formatted_time = booking_dt.strftime('%A, %B %d at %I:%M %p')
+                except:
+                    formatted_time = start_time
+                
+                response_text = f"I found a booking for {attendee_name} on {formatted_time}. Can you confirm your email address for verification?"
+                return create_speech_input_ncco(response_text, 'verify_identity')
+            else:
+                response_text = "I couldn't find that booking. Can you provide your booking reference number? It's in your confirmation email."
+                return create_speech_input_ncco(response_text, 'retry_lookup')
+        
+        elif email:
+            # Look up by email
+            result = calendar_helper.lookup_bookings_by_email(email)
+            
+            if result['success'] and result['count'] > 0:
+                if result['count'] == 1:
+                    # Single booking found
+                    booking = result['bookings'][0]
+                    session['modification_booking'] = booking
+                    session['modification_state'] = 'choose_action'
+                    
+                    start_time = booking.get('startTime', '')
+                    try:
+                        booking_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00')).replace(tzinfo=None)
+                        formatted_time = booking_dt.strftime('%A, %B %d at %I:%M %p')
+                    except:
+                        formatted_time = start_time
+                    
+                    response_text = f"I found your booking for {formatted_time}. Would you like to change the time or cancel the booking?"
+                    return create_speech_input_ncco(response_text, 'choose_action')
+                else:
+                    # Multiple bookings
+                    bookings_list = []
+                    for i, b in enumerate(result['bookings'][:5]):
+                        start_time = b.get('startTime', '')
+                        try:
+                            booking_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00')).replace(tzinfo=None)
+                            time_str = booking_dt.strftime('%A, %B %d at %I:%M %p')
+                        except:
+                            time_str = start_time
+                        bookings_list.append(f"{i+1}. {time_str}")
+                    
+                    session['modification_bookings'] = result['bookings']
+                    session['modification_state'] = 'select_booking'
+                    
+                    response_text = f"I found {result['count']} upcoming bookings for you. {' '.join(bookings_list)} Which one would you like to modify? You can say the number."
+                    return create_speech_input_ncco(response_text, 'select_booking')
+            else:
+                response_text = "I couldn't find any upcoming bookings with that email. Can you provide your booking reference number?"
+                return create_speech_input_ncco(response_text, 'retry_lookup')
+        else:
+            # No booking ref or email provided
+            response_text = "To modify your booking, I'll need either your booking reference number or the email address you used to make the booking."
+            return create_speech_input_ncco(response_text, 'request_lookup_info')
+    
+    # State 2: Choose action (modify or cancel)
+    elif mod_state == 'choose_action':
+        if 'cancel' in user_input.lower():
+            session['modification_action'] = 'cancel'
+            session['modification_state'] = 'confirm_cancel'
+            
+            booking = session.get('modification_booking', {})
+            start_time = booking.get('startTime', '')
+            try:
+                booking_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00')).replace(tzinfo=None)
+                formatted_time = booking_dt.strftime('%A, %B %d at %I:%M %p')
+            except:
+                formatted_time = start_time
+            
+            response_text = f"I understand you want to cancel your booking for {formatted_time}. Are you sure you want to cancel?"
+            return create_speech_input_ncco(response_text, 'confirm_cancel')
+        
+        elif any(word in user_input.lower() for word in ['change', 'modify', 'reschedule', 'different']):
+            session['modification_action'] = 'reschedule'
+            session['modification_state'] = 'get_new_time'
+            
+            response_text = "No problem! What new date and time would you like?"
+            return create_speech_input_ncco(response_text, 'get_new_time')
+        
+        else:
+            response_text = "Would you like to reschedule the booking to a different time, or cancel it completely?"
+            return create_speech_input_ncco(response_text, 'retry_choose_action')
+    
+    # State 3: Confirm cancellation
+    elif mod_state == 'confirm_cancel':
+        confirmation = entities.get('confirmation')
+        
+        if confirmation is True:
+            booking = session.get('modification_booking', {})
+            booking_id = booking.get('id')
+            
+            result = calendar_helper.cancel_booking(booking_id)
+            
+            if result['success']:
+                response_text = "Your booking has been cancelled successfully. You'll receive a cancellation confirmation email shortly. Is there anything else I can help you with?"
+                session['modification_state'] = 'completed'
+                return create_speech_input_ncco(response_text, 'cancellation_complete', allow_barge_in=False)
+            else:
+                response_text = "I'm having trouble cancelling your booking. Let me transfer you to someone who can help."
+                return escalation_handler.create_escalation_ncco('cancellation_error', {})
+        
+        elif confirmation is False:
+            response_text = "No problem! Your booking remains active. Is there anything else I can help you with?"
+            session['modification_state'] = 'completed'
+            return create_speech_input_ncco(response_text, 'cancel_declined')
+        
+        else:
+            response_text = "I didn't catch that. Are you sure you want to cancel your booking? Please say yes or no."
+            return create_speech_input_ncco(response_text, 'retry_confirm_cancel')
+    
+    # State 4: Get new time for rescheduling
+    elif mod_state == 'get_new_time':
+        # Extract new date/time from entities
+        new_date_time = entities.get('date_time')
+        
+        if new_date_time:
+            # Check availability for new time
+            booking = session.get('modification_booking', {})
+            
+            # Get duration from original booking
+            try:
+                start_str = booking.get('startTime', '')
+                end_str = booking.get('endTime', '')
+                if start_str and end_str:
+                    start_dt = datetime.fromisoformat(start_str.replace('Z', '+00:00')).replace(tzinfo=None)
+                    end_dt = datetime.fromisoformat(end_str.replace('Z', '+00:00')).replace(tzinfo=None)
+                    duration_hours = int((end_dt - start_dt).total_seconds() / 3600)
+                else:
+                    duration_hours = 1
+            except:
+                duration_hours = 1
+            
+            # Determine service type from booking description
+            description = booking.get('description', 'basketball')
+            service_type = 'basketball'  # Default
+            if 'party' in description.lower():
+                service_type = 'birthday_party'
+            elif 'tennis' in description.lower():
+                service_type = 'tennis'
+            
+            availability = calendar_helper.check_availability(
+                new_date_time,
+                service_type,
+                duration_hours
+            )
+            
+            if availability['available']:
+                session['new_booking_time'] = new_date_time
+                session['modification_state'] = 'confirm_reschedule'
+                
+                try:
+                    new_dt = datetime.strptime(new_date_time, '%Y-%m-%d %H:%M')
+                    formatted_time = new_dt.strftime('%A, %B %d at %I:%M %p')
+                except:
+                    formatted_time = new_date_time
+                
+                response_text = f"Great! The new time is available. Let me confirm: you want to change your booking to {formatted_time}. Is that correct?"
+                return create_speech_input_ncco(response_text, 'confirm_reschedule')
+            else:
+                alternatives = availability.get('alternatives', [])
+                if alternatives:
+                    response_text = f"I'm sorry, that time is not available. I have availability on {alternatives[0]}. Would that work for you?"
+                else:
+                    response_text = "I'm sorry, that time is not available. Would you like to try a different date or time?"
+                
+                return create_speech_input_ncco(response_text, 'alternative_offered')
+        else:
+            response_text = "I need both a date and time for the new booking. When would you like to reschedule to?"
+            return create_speech_input_ncco(response_text, 'retry_get_new_time')
+    
+    # State 5: Confirm rescheduling
+    elif mod_state == 'confirm_reschedule':
+        confirmation = entities.get('confirmation')
+        
+        if confirmation is True:
+            booking = session.get('modification_booking', {})
+            booking_id = booking.get('id')
+            new_time = session.get('new_booking_time')
+            
+            result = calendar_helper.reschedule_booking(booking_id, new_time)
+            
+            if result['success']:
+                try:
+                    new_dt = datetime.strptime(new_time, '%Y-%m-%d %H:%M')
+                    formatted_time = new_dt.strftime('%A, %B %d at %I:%M %p')
+                except:
+                    formatted_time = new_time
+                
+                response_text = f"Perfect! Your booking has been rescheduled to {formatted_time}. You'll receive an updated confirmation email. Is there anything else I can help you with?"
+                session['modification_state'] = 'completed'
+                return create_speech_input_ncco(response_text, 'reschedule_complete', allow_barge_in=False)
+            else:
+                response_text = "I'm having trouble rescheduling your booking. Let me transfer you to someone who can help."
+                return escalation_handler.create_escalation_ncco('reschedule_error', {})
+        
+        elif confirmation is False:
+            session['modification_state'] = 'get_new_time'
+            response_text = "No problem! What date and time would you prefer?"
+            return create_speech_input_ncco(response_text, 'retry_get_new_time')
+        
+        else:
+            response_text = "I didn't catch that. Is the new time correct? Please say yes or no."
+            return create_speech_input_ncco(response_text, 'retry_confirm_reschedule')
+    
+    # Default fallback
+    response_text = "I'm not sure how to help with that. Would you like to modify a booking or cancel it?"
+    return create_speech_input_ncco(response_text, 'modification_fallback')
 
 def create_greeting_ncco():
     """Create initial greeting NCCO with sequential talk then input."""

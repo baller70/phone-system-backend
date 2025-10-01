@@ -447,6 +447,179 @@ Booked via phone system at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
         except Exception as e:
             print(f"Error getting event types: {e}")
             return []
+    
+    def lookup_booking_by_id(self, booking_id: str) -> Dict[str, Any]:
+        """
+        Look up a booking by Cal.com booking ID.
+        Phase 3: Support for modification and cancellation.
+        """
+        if not self.api_token:
+            return {'success': False, 'error': 'Cal.com API token not configured'}
+        
+        try:
+            response = self._make_request('GET', f'/bookings/{booking_id}')
+            
+            if response.status_code == 200:
+                booking = response.json()
+                return {
+                    'success': True,
+                    'booking': booking
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': 'Booking not found'
+                }
+        
+        except Exception as e:
+            print(f"Error looking up booking: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def lookup_bookings_by_email(self, email: str) -> Dict[str, Any]:
+        """
+        Look up bookings by customer email.
+        Phase 3: Support for modification and cancellation.
+        """
+        if not self.api_token:
+            return {'success': False, 'error': 'Cal.com API token not configured'}
+        
+        try:
+            # Get all bookings
+            params = {
+                'apiKey': self.api_token,
+                'status': 'upcoming'
+            }
+            
+            response = requests.get(f"{self.base_url}/bookings", params=params)
+            
+            if response.status_code == 200:
+                all_bookings = response.json().get('bookings', [])
+                
+                # Filter by email
+                email_lower = email.lower()
+                matching_bookings = []
+                
+                for booking in all_bookings:
+                    attendees = booking.get('attendees', [])
+                    for attendee in attendees:
+                        if attendee.get('email', '').lower() == email_lower:
+                            matching_bookings.append(booking)
+                            break
+                
+                # Only return future bookings
+                now = datetime.now()
+                future_bookings = [
+                    b for b in matching_bookings
+                    if datetime.fromisoformat(b.get('startTime', '').replace('Z', '+00:00')).replace(tzinfo=None) > now
+                ]
+                
+                return {
+                    'success': True,
+                    'bookings': future_bookings,
+                    'count': len(future_bookings)
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': 'Failed to fetch bookings'
+                }
+        
+        except Exception as e:
+            print(f"Error looking up bookings by email: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def cancel_booking(self, booking_id: str, reason: str = "Customer requested") -> Dict[str, Any]:
+        """
+        Cancel a booking in Cal.com.
+        Phase 3: Support for cancellation flow.
+        """
+        if not self.api_token:
+            return {'success': False, 'error': 'Cal.com API token not configured'}
+        
+        try:
+            url = f"{self.base_url}/bookings/{booking_id}/cancel"
+            params = {'apiKey': self.api_token}
+            data = {'reason': reason}
+            headers = {'Content-Type': 'application/json'}
+            
+            response = requests.post(url, params=params, json=data, headers=headers)
+            
+            if response.status_code in [200, 201]:
+                print(f"✅ Booking {booking_id} cancelled successfully")
+                return {
+                    'success': True,
+                    'message': 'Booking cancelled successfully'
+                }
+            else:
+                print(f"❌ Failed to cancel booking: {response.status_code}")
+                return {
+                    'success': False,
+                    'error': f'Failed to cancel booking: {response.status_code}',
+                    'details': response.text[:200]
+                }
+        
+        except Exception as e:
+            print(f"Error cancelling booking: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def reschedule_booking(self, booking_id: str, new_date_time_str: str) -> Dict[str, Any]:
+        """
+        Reschedule an existing booking to a new time.
+        Phase 3: Support for modification flow.
+        """
+        if not self.api_token:
+            return {'success': False, 'error': 'Cal.com API token not configured'}
+        
+        try:
+            # Parse the new date/time
+            new_datetime = datetime.strptime(new_date_time_str, '%Y-%m-%d %H:%M')
+            
+            # Get the existing booking to get duration
+            booking_lookup = self.lookup_booking_by_id(booking_id)
+            if not booking_lookup['success']:
+                return {'success': False, 'error': 'Booking not found'}
+            
+            existing_booking = booking_lookup['booking']
+            
+            # Cal.com API: Update booking
+            url = f"{self.base_url}/bookings/{booking_id}"
+            params = {'apiKey': self.api_token}
+            data = {
+                'start': new_datetime.isoformat()
+            }
+            headers = {'Content-Type': 'application/json'}
+            
+            response = requests.patch(url, params=params, json=data, headers=headers)
+            
+            if response.status_code in [200, 201]:
+                print(f"✅ Booking {booking_id} rescheduled successfully")
+                return {
+                    'success': True,
+                    'booking': response.json()
+                }
+            else:
+                print(f"❌ Failed to reschedule booking: {response.status_code}")
+                return {
+                    'success': False,
+                    'error': f'Failed to reschedule booking: {response.status_code}',
+                    'details': response.text[:200]
+                }
+        
+        except Exception as e:
+            print(f"Error rescheduling booking: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
 # Example usage and testing
 if __name__ == "__main__":
