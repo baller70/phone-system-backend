@@ -20,6 +20,9 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# Get base URL for webhooks (use environment variable or default to request)
+BASE_URL = os.getenv('BASE_URL', 'https://phone-system-backend.onrender.com')
+
 # Initialize components
 nlu = SportsRentalNLU()
 calendar_helper = CalcomCalendarHelper()
@@ -263,7 +266,7 @@ def create_greeting_ncco():
         },
         {
             "action": "input",
-            "eventUrl": [f"{request.url_root}webhooks/speech"],
+            "eventUrl": [f"{BASE_URL}/webhooks/speech"],
             "timeOut": 10,
             "maxDigits": 0,
             "speech": {
@@ -285,7 +288,7 @@ def create_speech_input_ncco(text, context_state):
         },
         {
             "action": "input",
-            "eventUrl": [f"{request.url_root}webhooks/speech"],
+            "eventUrl": [f"{BASE_URL}/webhooks/speech"],
             "timeOut": 10,
             "maxDigits": 0,
             "speech": {
@@ -336,7 +339,7 @@ def create_clarification_ncco():
         },
         {
             "action": "input",
-            "eventUrl": [f"{request.url_root}webhooks/speech"],
+            "eventUrl": [f"{BASE_URL}/webhooks/speech"],
             "timeOut": 10,
             "maxDigits": 0,
             "speech": {
