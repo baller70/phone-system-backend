@@ -40,6 +40,9 @@ from monitoring.health_checks import health_check_service
 
 # Phase 6: Import database and advanced features
 from database import db as database
+from auth_middleware import require_auth, optional_auth, get_user_from_request
+from user_manager import UserManager
+from call_logger import CallLogger
 from personalization.vip_manager import VIPManager
 from personalization.loyalty_system import LoyaltySystem
 from personalization.preference_learner import PreferenceLearner
@@ -57,8 +60,35 @@ from communication.rebooking_service import RebookingService
 load_dotenv()
 
 app = Flask(__name__)
-# Enable CORS for all routes to allow dashboard to connect
-CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Configure CORS to allow credentials and specific origins
+dashboard_origins = [
+    'http://localhost:3000',
+    'https://phone-system-dashboard.vercel.app',
+    'https://*.vercel.app',
+    'https://*.replit.dev',
+    'https://*.reai.io',
+]
+
+CORS(app, 
+     resources={r"/*": {
+         "origins": dashboard_origins,
+         "allow_headers": ["Content-Type", "Authorization", "X-API-Key"],
+         "expose_headers": ["Content-Type", "Authorization"],
+         "supports_credentials": True,
+         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+     }})
+
+# Add CORS headers to all responses
+@app.after_request
+def after_request(response):
+    origin = request.headers.get('Origin')
+    if origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-API-Key'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    return response
 
 # Get base URL for webhooks (use environment variable or default to request)
 BASE_URL = os.getenv('BASE_URL', 'https://phone-system-backend.onrender.com')
@@ -68,6 +98,10 @@ nlu = SportsRentalNLU()
 calendar_helper = CalcomCalendarHelper()
 pricing_engine = PricingEngine()
 escalation_handler = EscalationHandler()
+
+# Initialize authentication and user management
+user_manager = UserManager(database)
+call_logger = CallLogger(database)
 
 # Initialize Phase 6 services with database
 vip_manager = VIPManager(database)
@@ -147,6 +181,14 @@ def answer_call():
         
         # PHASE 5: Record call start metrics
         metrics_service.record_call_start()
+        
+        # Log call start
+        call_logger.start_call(
+            conversation_uuid=conversation_uuid,
+            caller_id=from_number,
+            user_id=None,  # Will be set later if customer is linked to a user
+            metadata={'call_data': call_data}
+        )
         
         # PHASE 5: Start call recording
         recording_info = call_recording_service.start_recording(
@@ -260,9 +302,24 @@ def handle_events():
                 recording_url = event_data.get('recording_url')
                 call_recording_service.stop_recording(conversation_uuid, recording_url)
                 
+                # Calculate call cost (Vonage pricing: ~$0.013/min)
+                cost = (duration / 60.0) * 0.013 if duration > 0 else 0.0
+                
+                # Update call log with final information
+                call_logger.update_call(
+                    conversation_uuid=conversation_uuid,
+                    duration=int(duration),
+                    cost=round(cost, 4),
+                    outcome=event_status,
+                    intent=session.get('context', {}).get('intent', 'unknown'),
+                    recording_url=recording_url,
+                    caller_name=session.get('booking_info', {}).get('customer_name')
+                )
+                
                 # Log final call summary
                 print(f"📞 Call Summary for {conversation_uuid}:")
                 print(f"   Duration: {duration:.1f}s")
+                print(f"   Cost: ${cost:.4f}")
                 print(f"   Status: {event_status}")
                 print(f"   Returning Customer: {session.get('is_returning_customer', False)}")
                 print(f"   Final State: {session.get('conversation_state', 'unknown')}")
@@ -2254,6 +2311,116 @@ def broadcast_event():
         return jsonify({'status': 'broadcasted'})
     except Exception as e:
         logger.error(f"Broadcast error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# USER-SPECIFIC CALL LOGS & ANALYTICS
+# ============================================
+
+@app.route('/api/call-logs', methods=['GET'])
+@optional_auth
+def get_call_logs():
+    """Get call logs filtered by user"""
+    try:
+        # Get user from auth
+        user = getattr(request, 'user', None)
+        user_id = user['id'] if user else None
+        
+        # Get query parameters
+        limit = request.args.get('limit', 50, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        intent = request.args.get('intent')
+        outcome = request.args.get('outcome')
+        
+        # Get call logs
+        result = call_logger.list_calls(
+            user_id=user_id,
+            limit=limit,
+            offset=offset,
+            intent=intent,
+            outcome=outcome
+        )
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error getting call logs: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/call-logs/<conversation_uuid>', methods=['GET'])
+@optional_auth
+def get_call_log_detail(conversation_uuid):
+    """Get specific call log details"""
+    try:
+        call = call_logger.get_call(conversation_uuid)
+        
+        if not call:
+            return jsonify({'error': 'Call not found'}), 404
+        
+        # Check if user has access to this call
+        user = getattr(request, 'user', None)
+        if user and call.get('user_id') and call['user_id'] != user['id']:
+            return jsonify({'error': 'Access denied'}), 403
+        
+        return jsonify(call)
+    except Exception as e:
+        logger.error(f"Error getting call log: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/call-logs/stats', methods=['GET'])
+@optional_auth
+def get_call_stats_endpoint():
+    """Get call statistics for the user"""
+    try:
+        user = getattr(request, 'user', None)
+        user_id = user['id'] if user else None
+        
+        days = request.args.get('days', 30, type=int)
+        
+        stats = call_logger.get_call_stats(user_id=user_id, days=days)
+        
+        return jsonify(stats)
+    except Exception as e:
+        logger.error(f"Error getting call stats: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/users/current', methods=['GET'])
+@require_auth
+def get_current_user():
+    """Get current authenticated user"""
+    try:
+        user = request.user
+        
+        # Get or create user in backend database
+        db_user = user_manager.get_or_create_user(
+            user_id=user['id'],
+            email=user['email'],
+            name=user.get('name')
+        )
+        
+        return jsonify(db_user)
+    except Exception as e:
+        logger.error(f"Error getting current user: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/users/sync', methods=['POST'])
+@require_auth
+def sync_user():
+    """Sync user information from dashboard to backend"""
+    try:
+        user = request.user
+        data = request.json or {}
+        
+        # Get or create user
+        db_user = user_manager.get_or_create_user(
+            user_id=user['id'],
+            email=user['email'],
+            name=user.get('name'),
+            **data
+        )
+        
+        return jsonify(db_user)
+    except Exception as e:
+        logger.error(f"Error syncing user: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 # ============================================
