@@ -2028,7 +2028,282 @@ def get_phase7_stats():
         logger.error(f"Error getting Phase 7 stats: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+# ============================================
+# PHASE 8 API ENDPOINTS
+# Enterprise Scale & Revenue Acceleration
+# ============================================
+
+# Phase 8: Import services
+from payments import get_stripe_service, StripePaymentHandler, RefundProcessor, SubscriptionManager
+from realtime import socket_manager, init_socketio, EventBroadcaster
+
+# Initialize Phase 8 services
+stripe_service = get_stripe_service(database)
+refund_processor = RefundProcessor(database, stripe_service.enabled)
+subscription_manager = SubscriptionManager(database, stripe_service.enabled)
+
+# Initialize WebSocket
+socketio = init_socketio(app)
+event_broadcaster = EventBroadcaster(socket_manager)
+
+print("✅ Phase 8 services initialized:")
+print(f"  - Stripe Payments: {'Enabled' if stripe_service.enabled else 'Disabled (Test Mode)'}")
+print(f"  - WebSocket Server: Enabled")
+print(f"  - Real-time Events: Enabled")
+
+# ============================================
+# PAYMENTS API
+# ============================================
+
+@app.route('/api/payments/create', methods=['POST'])
+def create_payment():
+    """Create a payment intent."""
+    try:
+        data = request.json
+        
+        result = stripe_service.create_payment_intent(
+            amount=data['amount'],
+            customer_phone=data['customer_phone'],
+            booking_id=data['booking_id'],
+            payment_type=data.get('payment_type', 'full'),
+            metadata=data.get('metadata')
+        )
+        
+        # Broadcast event
+        event_broadcaster.send_metric_update(
+            'payment_created',
+            result['amount'],
+            {'payment_id': result['payment_id']}
+        )
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Payment creation error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/payments/confirm', methods=['POST'])
+def confirm_payment():
+    """Confirm a payment intent."""
+    try:
+        data = request.json
+        
+        result = stripe_service.confirm_payment(
+            payment_id=data['payment_id'],
+            payment_method_id=data.get('payment_method_id')
+        )
+        
+        if result['status'] == 'completed':
+            # Get payment details
+            payment = database.query(
+                "SELECT * FROM payments WHERE id = ?",
+                [data['payment_id']]
+            )
+            
+            if payment:
+                event_broadcaster.notify_payment_received(payment[0])
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Payment confirmation error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/payments/deposit', methods=['POST'])
+def create_deposit():
+    """Create a deposit payment."""
+    try:
+        data = request.json
+        
+        result = stripe_service.create_deposit_payment(
+            total_amount=data['total_amount'],
+            customer_phone=data['customer_phone'],
+            booking_id=data['booking_id'],
+            deposit_percent=data.get('deposit_percent', 30.0)
+        )
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Deposit creation error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/payments/refund', methods=['POST'])
+def process_refund():
+    """Process a refund."""
+    try:
+        data = request.json
+        
+        result = refund_processor.process_refund(
+            payment_id=data['payment_id'],
+            amount=data.get('amount'),
+            reason=data.get('reason', 'Customer request')
+        )
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Refund processing error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/payments/history', methods=['GET'])
+def payment_history():
+    """Get payment history for a customer."""
+    try:
+        customer_phone = request.args.get('customer_phone')
+        limit = int(request.args.get('limit', 50))
+        
+        history = stripe_service.get_payment_history(customer_phone, limit)
+        
+        return jsonify({
+            'customer_phone': customer_phone,
+            'payments': history
+        })
+    except Exception as e:
+        logger.error(f"Payment history error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/payments/analytics', methods=['GET'])
+def payment_analytics():
+    """Get payment analytics."""
+    try:
+        days = int(request.args.get('days', 30))
+        
+        analytics = stripe_service.get_payment_analytics(days)
+        
+        return jsonify(analytics)
+    except Exception as e:
+        logger.error(f"Payment analytics error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# SUBSCRIPTIONS API
+# ============================================
+
+@app.route('/api/subscriptions/create', methods=['POST'])
+def create_subscription():
+    """Create a subscription."""
+    try:
+        data = request.json
+        
+        result = subscription_manager.create_subscription(
+            customer_phone=data['customer_phone'],
+            plan_name=data['plan_name'],
+            amount=data['amount'],
+            interval=data.get('interval', 'monthly')
+        )
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Subscription creation error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/subscriptions/<subscription_id>/cancel', methods=['POST'])
+def cancel_subscription(subscription_id):
+    """Cancel a subscription."""
+    try:
+        data = request.json or {}
+        
+        result = subscription_manager.cancel_subscription(
+            subscription_id=subscription_id,
+            cancel_immediately=data.get('cancel_immediately', False)
+        )
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Subscription cancellation error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/subscriptions', methods=['GET'])
+def list_subscriptions():
+    """List subscriptions."""
+    try:
+        customer_phone = request.args.get('customer_phone')
+        status = request.args.get('status')
+        
+        subscriptions = subscription_manager.list_subscriptions(customer_phone, status)
+        
+        return jsonify({
+            'subscriptions': subscriptions
+        })
+    except Exception as e:
+        logger.error(f"Subscription listing error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# REAL-TIME / WEBSOCKET API
+# ============================================
+
+@app.route('/api/realtime/stats', methods=['GET'])
+def websocket_stats():
+    """Get WebSocket statistics."""
+    try:
+        stats = socket_manager.get_stats()
+        return jsonify(stats)
+    except Exception as e:
+        logger.error(f"WebSocket stats error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/realtime/broadcast', methods=['POST'])
+def broadcast_event():
+    """Broadcast an event to all clients."""
+    try:
+        data = request.json
+        
+        event_broadcaster.broadcast(
+            event=data['event'],
+            data=data['data']
+        )
+        
+        return jsonify({'status': 'broadcasted'})
+    except Exception as e:
+        logger.error(f"Broadcast error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# PHASE 8 STATISTICS & HEALTH
+# ============================================
+
+@app.route('/api/stats/phase8', methods=['GET'])
+def get_phase8_stats():
+    """Get Phase 8 feature statistics."""
+    try:
+        stats = {
+            'payments': {
+                'total_payments': 0,
+                'completed_payments': 0,
+                'total_revenue': 0,
+                'refunds_issued': 0
+            },
+            'subscriptions': {
+                'active_subscriptions': 0,
+                'cancelled_subscriptions': 0,
+                'monthly_recurring_revenue': 0
+            },
+            'realtime': socket_manager.get_stats(),
+            'phase': 8,
+            'status': 'active'
+        }
+        
+        # Get payment stats
+        payment_stats = stripe_service.get_payment_analytics(days=30)
+        stats['payments'].update(payment_stats)
+        
+        # Get subscription stats
+        active_subs = subscription_manager.list_subscriptions(status='active')
+        stats['subscriptions']['active_subscriptions'] = len(active_subs) if active_subs else 0
+        
+        return jsonify(stats)
+    except Exception as e:
+        logger.error(f"Error getting Phase 8 stats: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# RUN APPLICATION
+# ============================================
+
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     debug = os.getenv('FLASK_ENV') == 'development'
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    
+    # Run with WebSocket support
+    if os.getenv('USE_SOCKETIO', 'true').lower() == 'true':
+        socketio.run(app, host='0.0.0.0', port=port, debug=debug)
+    else:
+        app.run(host='0.0.0.0', port=port, debug=debug)

@@ -283,6 +283,17 @@ class DatabaseManager:
                 cursor = self._connection.cursor()
                 cursor.execute(schema)
                 logger.info("PostgreSQL Phase 7 migrations completed")
+            
+            # Run Phase 8 migrations
+            schema_path_8 = os.path.join(os.path.dirname(__file__), 'migrations', 'phase8_schema.sql')
+            
+            if os.path.exists(schema_path_8):
+                with open(schema_path_8, 'r') as f:
+                    schema = f.read()
+                
+                cursor = self._connection.cursor()
+                cursor.execute(schema)
+                logger.info("PostgreSQL Phase 8 migrations completed")
                 
         except Exception as e:
             logger.error(f"PostgreSQL migration failed: {str(e)}")

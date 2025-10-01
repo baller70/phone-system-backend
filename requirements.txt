@@ -42,3 +42,19 @@ gunicorn==21.2.0               # Production server
 flask-cors==4.0.0
 psycopg2-binary==2.9.9
 # python-dateutil provides relativedelta
+
+# ============================================
+# PHASE 8: Enterprise Scale & Revenue Acceleration
+# ============================================
+stripe==8.0.0                  # Payment processing
+flask-socketio==5.3.6          # WebSocket support
+python-socketio==5.11.0        # SocketIO client
+eventlet==0.35.1               # Async server for WebSocket
+redis==5.0.1                   # Caching & real-time data
+pyowm==3.3.0                   # OpenWeatherMap API
+textblob==0.17.1               # Sentiment analysis
+scikit-learn==1.3.2            # ML models (if not already installed)
+joblib==1.3.2                  # Model serialization
+cryptography==41.0.7           # Encryption
+pyjwt==2.8.0                   # JWT tokens
+bcrypt==4.1.2                  # Password hashing
