@@ -99,49 +99,63 @@ class CalcomCalendarHelper:
             
             print(f"🔍 Checking availability for {date_time_str} ({service_type})")
             
-            # Get day start and end for the requested date
+            # Check for existing bookings that conflict with the requested time
+            # Get bookings for the requested date
             day_start = requested_datetime.replace(hour=0, minute=0, second=0, microsecond=0)
             day_end = requested_datetime.replace(hour=23, minute=59, second=59, microsecond=999999)
             
-            # Check availability using Cal.com's v2 availability endpoint
-            availability_url = "https://api.cal.com/v2/slots/available"
-            availability_params = {
+            # Get existing bookings using the bookings API
+            bookings_params = {
                 'apiKey': self.api_token,
-                'startTime': day_start.isoformat(),
-                'endTime': day_end.isoformat(),
-                'eventTypeId': self.event_type_id or 3503822
+                'status': 'upcoming',
+                'afterStart': day_start.isoformat(),
+                'beforeEnd': day_end.isoformat()
             }
             
-            response = requests.get(availability_url, params=availability_params)
-            
-            if response.status_code != 200:
-                print(f"   Cal.com availability check returned {response.status_code}, assuming available")
-                # If API call fails, assume available (fail-open for better UX)
-                slot_available = True
-            else:
-                availability_data = response.json()
+            try:
+                bookings_response = requests.get(
+                    f"{self.base_url}/bookings",
+                    params=bookings_params
+                )
                 
-                # Get available slots for the requested date
-                date_str = requested_datetime.strftime('%Y-%m-%d')
-                available_slots = availability_data.get('data', {}).get('slots', {}).get(date_str, [])
-                
-                print(f"   Cal.com returned {len(available_slots)} available slots")
-                
-                # Check if any available slot matches our requested time
-                slot_available = False
-                for slot in available_slots:
-                    slot_time_str = slot.get('time', '')
-                    # Parse the slot time (format: "2025-10-02T15:00:00.000Z")
-                    try:
-                        slot_datetime = datetime.fromisoformat(slot_time_str.replace('Z', '+00:00'))
+                if bookings_response.status_code == 200:
+                    bookings_data = bookings_response.json()
+                    existing_bookings = bookings_data.get('bookings', [])
+                    
+                    print(f"   Found {len(existing_bookings)} existing bookings for this date")
+                    
+                    # Check if any booking conflicts with requested time
+                    slot_available = True
+                    for booking in existing_bookings:
+                        booking_start_str = booking.get('startTime', '')
+                        booking_end_str = booking.get('endTime', '')
                         
-                        # Check if slot time matches requested time (within 15 minutes)
-                        time_diff = abs((slot_datetime.replace(tzinfo=None) - requested_datetime).total_seconds())
-                        if time_diff < 900:  # 15 minutes
-                            slot_available = True
-                            break
-                    except:
-                        continue
+                        if booking_start_str and booking_end_str:
+                            try:
+                                # Parse booking times
+                                booking_start = datetime.fromisoformat(booking_start_str.replace('Z', '+00:00')).replace(tzinfo=None)
+                                booking_end = datetime.fromisoformat(booking_end_str.replace('Z', '+00:00')).replace(tzinfo=None)
+                                
+                                # Check if requested time overlaps with existing booking
+                                if (requested_datetime < booking_end and end_datetime > booking_start):
+                                    print(f"   ❌ Conflict found: Existing booking from {booking_start} to {booking_end}")
+                                    slot_available = False
+                                    break
+                            except Exception as e:
+                                print(f"   Warning: Could not parse booking time: {e}")
+                                continue
+                    
+                    if slot_available:
+                        print(f"   ✅ No conflicts found - slot is available")
+                else:
+                    print(f"   Cal.com bookings API returned {bookings_response.status_code}, assuming available")
+                    # If API call fails, assume available (fail-open for better UX)
+                    slot_available = True
+                    
+            except Exception as e:
+                print(f"   Error checking bookings: {e}, assuming available")
+                # If there's an error, assume available (fail-open)
+                slot_available = True
             
             if not slot_available:
                 return {
