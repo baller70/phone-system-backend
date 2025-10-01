@@ -200,6 +200,63 @@ class SportsRentalNLU:
                 time_info['time_reference'] = time_ref
                 break
         
+        # Extract specific dates (e.g., "October 2nd", "Oct 2", "10/2")
+        date_patterns = [
+            r'(january|jan)\s+(\d{1,2})',
+            r'(february|feb)\s+(\d{1,2})',
+            r'(march|mar)\s+(\d{1,2})',
+            r'(april|apr)\s+(\d{1,2})',
+            r'(may)\s+(\d{1,2})',
+            r'(june|jun)\s+(\d{1,2})',
+            r'(july|jul)\s+(\d{1,2})',
+            r'(august|aug)\s+(\d{1,2})',
+            r'(september|sept|sep)\s+(\d{1,2})',
+            r'(october|oct)\s+(\d{1,2})',
+            r'(november|nov)\s+(\d{1,2})',
+            r'(december|dec)\s+(\d{1,2})'
+        ]
+        
+        month_map = {
+            'january': 1, 'jan': 1,
+            'february': 2, 'feb': 2,
+            'march': 3, 'mar': 3,
+            'april': 4, 'apr': 4,
+            'may': 5,
+            'june': 6, 'jun': 6,
+            'july': 7, 'jul': 7,
+            'august': 8, 'aug': 8,
+            'september': 9, 'sept': 9, 'sep': 9,
+            'october': 10, 'oct': 10,
+            'november': 11, 'nov': 11,
+            'december': 12, 'dec': 12
+        }
+        
+        specific_date = None
+        for pattern in date_patterns:
+            date_match = re.search(pattern, speech_text, re.IGNORECASE)
+            if date_match:
+                month_name = date_match.group(1).lower()
+                day = int(date_match.group(2))
+                month = month_map.get(month_name)
+                
+                if month and 1 <= day <= 31:
+                    # Determine the year (current year or next year)
+                    now = datetime.now()
+                    year = now.year
+                    
+                    # If the date is in the past this year, assume next year
+                    try:
+                        specific_date = datetime(year, month, day)
+                        if specific_date < now:
+                            specific_date = datetime(year + 1, month, day)
+                    except ValueError:
+                        # Invalid date
+                        pass
+                    
+                    if specific_date:
+                        time_info['specific_date'] = specific_date
+                        break
+        
         # Extract specific times (e.g., "3 PM", "10:30 AM")
         time_match = re.search(self.number_patterns['specific_time'], speech_text, re.IGNORECASE)
         if time_match:
@@ -216,7 +273,17 @@ class SportsRentalNLU:
             time_info['specific_time'] = f"{hour:02d}:{minute:02d}"
         
         # Convert relative references to actual datetime
-        if 'time_reference' in time_info:
+        if 'specific_date' in time_info:
+            # Use the specific date if provided
+            target_date = time_info['specific_date']
+            if 'specific_time' in time_info:
+                hour, minute = map(int, time_info['specific_time'].split(':'))
+                target_date = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            else:
+                # Default to 3 PM if no time specified
+                target_date = target_date.replace(hour=15, minute=0, second=0, microsecond=0)
+            time_info['date_time'] = target_date.strftime('%Y-%m-%d %H:%M')
+        elif 'time_reference' in time_info:
             time_info['date_time'] = self._resolve_time_reference(
                 time_info['time_reference'], 
                 time_info.get('specific_time')
