@@ -74,6 +74,36 @@ class SportsRentalNLU:
                 r'\b(large group|corporate|team building|company event)\b',
                 r'\b(special requirements|equipment|catering|setup)\b',
                 r'\b(more than.*people|over.*kids|big group)\b'
+            ],
+            # Phase 6: Advanced Booking Intelligence
+            'recurring_booking': [
+                r'\b(every week|weekly|bi.*weekly|monthly|recurring)\b',
+                r'\b(same time every|regular.*booking|standing.*reservation)\b',
+                r'\b(every.*day|each.*week|all.*month)\b'
+            ],
+            'group_booking': [
+                r'\b(group of|for.*people|team of|party of)\b',
+                r'\b(we are|we want|us|our team|our group)\b',
+                r'\b(\d+\s+people|\d+\s+players|\d+\s+kids)\b'
+            ],
+            'express_booking': [
+                r'\b(my usual|same as.*last|usual.*time|regular.*spot)\b',
+                r'\b(book.*again|same.*again|like.*before)\b',
+                r'\b(usual.*booking|normal.*time|typical.*slot)\b'
+            ],
+            'waitlist': [
+                r'\b(wait.*list|waiting.*list|join.*wait|add me to.*list)\b',
+                r'\b(let me know|notify.*me|call.*available|tell.*open)\b',
+                r'\b(if.*available|when.*free|slot.*opens)\b'
+            ],
+            'loyalty_points': [
+                r'\b(points|loyalty.*points|rewards|balance)\b',
+                r'\b(how many.*points|use.*points|redeem|apply.*points)\b',
+                r'\b(point.*balance|my.*rewards|earned.*points)\b'
+            ],
+            'vip_inquiry': [
+                r'\b(vip|membership|benefits|perks|special.*treatment)\b',
+                r'\b(become.*vip|vip.*status|member.*benefits)\b'
             ]
         }
         
@@ -577,6 +607,58 @@ class SportsRentalNLU:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 return match.group(1).upper()
+        
+        return None
+    
+    def extract_group_size(self, text: str) -> Optional[int]:
+        """
+        Extract group size from text for group bookings.
+        Phase 6 enhancement for group booking support.
+        
+        Examples:
+            "for 10 people" -> 10
+            "group of 25" -> 25
+            "party of 8" -> 8
+        """
+        # Patterns to match group size
+        patterns = [
+            r'\b(\d+)\s+people\b',
+            r'\b(\d+)\s+players\b',
+            r'\b(\d+)\s+kids\b',
+            r'\b(\d+)\s+persons?\b',
+            r'\b(\d+)\s+guests?\b',
+            r'\bgroup\s+of\s+(\d+)\b',
+            r'\bparty\s+of\s+(\d+)\b',
+            r'\bteam\s+of\s+(\d+)\b',
+            r'\bfor\s+(\d+)\s+(?:people|players|kids|persons|guests)\b'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                size = int(match.group(1))
+                # Sanity check: group size should be between 2 and 100
+                if 2 <= size <= 100:
+                    return size
+        
+        return None
+    
+    def extract_recurring_frequency(self, text: str) -> Optional[str]:
+        """
+        Extract recurring booking frequency.
+        Phase 6 enhancement for recurring booking support.
+        
+        Returns:
+            'weekly', 'biweekly', 'monthly', or None
+        """
+        text_lower = text.lower()
+        
+        if re.search(r'\b(every\s+week|weekly|each\s+week)\b', text_lower):
+            return 'weekly'
+        elif re.search(r'\b(bi.*weekly|every\s+two\s+weeks|every\s+other\s+week)\b', text_lower):
+            return 'biweekly'
+        elif re.search(r'\b(monthly|every\s+month|each\s+month)\b', text_lower):
+            return 'monthly'
         
         return None
     

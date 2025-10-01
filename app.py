@@ -38,6 +38,21 @@ from intelligence.conversation_memory import conversation_memory
 from monitoring.metrics import metrics_service
 from monitoring.health_checks import health_check_service
 
+# Phase 6: Import database and advanced features
+from database import db as database
+from personalization.vip_manager import VIPManager
+from personalization.loyalty_system import LoyaltySystem
+from personalization.preference_learner import PreferenceLearner
+from booking_intelligence.recurring_bookings import RecurringBookingManager
+from booking_intelligence.group_bookings import GroupBookingManager
+from booking_intelligence.waitlist import WaitlistManager
+from booking_intelligence.availability_engine import AvailabilityEngine
+from scheduling.peak_time_analyzer import PeakTimeAnalyzer
+from scheduling.express_booking import ExpressBooking
+from scheduling.emergency_handler import EmergencyHandler
+from communication.email_service import EmailService
+from communication.rebooking_service import RebookingService
+
 # Load environment variables
 load_dotenv()
 
@@ -54,10 +69,33 @@ calendar_helper = CalcomCalendarHelper()
 pricing_engine = PricingEngine()
 escalation_handler = EscalationHandler()
 
+# Initialize Phase 6 services with database
+vip_manager = VIPManager(database)
+loyalty_system = LoyaltySystem(database)
+preference_learner = PreferenceLearner(database)
+recurring_booking_manager = RecurringBookingManager(database)
+group_booking_manager = GroupBookingManager(database)
+waitlist_manager = WaitlistManager(database)
+availability_engine = AvailabilityEngine(calendar_helper)
+peak_time_analyzer = PeakTimeAnalyzer(database)
+express_booking = ExpressBooking(database)
+emergency_handler = EmergencyHandler(database)
+email_service = EmailService(database)
+rebooking_service = RebookingService(database)
+
 print("✓ Phase 5 services initialized:")
 print(f"  - SMS Service: {'Enabled' if sms_service.enabled else 'Disabled'}")
 print(f"  - Call Recording: {'Enabled' if call_recording_service.recording_enabled else 'Disabled'}")
 print(f"  - Conversation Memory: {'Enabled (Redis)' if conversation_memory.redis_available else 'Enabled (In-Memory)'}")
+
+print("✓ Phase 6 services initialized:")
+print(f"  - Database: {database.db_type.upper()}")
+print(f"  - VIP Manager: Enabled")
+print(f"  - Loyalty System: Enabled")
+print(f"  - Email Service: {'Enabled' if email_service.enabled else 'Disabled'}")
+print(f"  - Recurring Bookings: Enabled")
+print(f"  - Group Bookings: Enabled")
+print(f"  - Waitlist: Enabled")
 
 # Initialize Vonage client
 try:
@@ -803,6 +841,55 @@ def process_confirmed_booking(booking_info, session):
             # PHASE 5: Record successful booking metrics
             metrics_service.record_booking('success', float(booking_info['price']))
             
+            # PHASE 6: Update customer profile and VIP status
+            customer_phone = booking_info.get('customer_phone')
+            price = float(booking_info['price'])
+            
+            if customer_phone:
+                try:
+                    # Update customer booking count and spent amount
+                    vip_manager.update_customer_stats(customer_phone, price, booking_info.get('customer_email'), booking_info.get('customer_name'))
+                    
+                    # Award loyalty points
+                    loyalty_result = loyalty_system.earn_points(customer_phone, price, booking_id)
+                    if loyalty_result.get('success'):
+                        points_earned = loyalty_result.get('points_earned', 0)
+                        print(f"🎁 Loyalty points awarded: {points_earned}")
+                    
+                    # Check VIP tier
+                    tier = vip_manager.calculate_customer_tier(customer_phone)
+                    print(f"⭐ Customer tier: {tier.upper()}")
+                    
+                    # Send email confirmation
+                    if booking_info.get('customer_email'):
+                        email_data = {
+                            'customer_email': booking_info['customer_email'],
+                            'customer_name': booking_info.get('customer_name', 'Valued Customer'),
+                            'facility_type': facility_name,
+                            'booking_date': booking_info['date'],
+                            'booking_time': booking_info['start_time'],
+                            'duration_hours': booking_info['duration_hours'],
+                            'price': booking_info['price'],
+                            'booking_id': booking_id,
+                            'customer_phone': customer_phone
+                        }
+                        email_sent = email_service.send_booking_confirmation(email_data)
+                        print(f"📧 Email confirmation {'sent' if email_sent else 'failed'}")
+                    
+                    # Track analytics
+                    peak_time_analyzer.record_booking(
+                        facility_type=booking_info['facility_type'],
+                        booking_date=booking_info['date'],
+                        booking_time=booking_info['start_time'],
+                        duration_hours=booking_info['duration_hours'],
+                        revenue=price
+                    )
+                    print(f"📊 Analytics recorded")
+                    
+                except Exception as e:
+                    logger.error(f"Phase 6 features error: {str(e)}")
+                    # Continue even if Phase 6 features fail
+            
             response_text = f"""Perfect! I've confirmed your booking for {facility_name} on {formatted_date} at {formatted_time} for {booking_info['duration_hours']} hour{'s' if booking_info['duration_hours'] > 1 else ''}.
 
 Your booking reference number is {booking_id}.
@@ -1371,6 +1458,274 @@ def get_call_recording(conversation_uuid):
         else:
             return jsonify({'error': 'Recording not found'}), 404
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# PHASE 6 API ENDPOINTS
+# ============================================================================
+
+@app.route('/api/customers/<customer_phone>', methods=['GET'])
+def get_customer_profile(customer_phone):
+    """PHASE 6: Get customer profile with VIP status and loyalty points."""
+    try:
+        tier = vip_manager.calculate_customer_tier(customer_phone)
+        points = loyalty_system.get_points_balance(customer_phone)
+        preferences = preference_learner.get_customer_preferences(customer_phone)
+        
+        return jsonify({
+            'phone': customer_phone,
+            'tier': tier,
+            'loyalty_points': points,
+            'preferences': preferences
+        })
+    except Exception as e:
+        logger.error(f"Error getting customer profile: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/loyalty/balance/<customer_phone>', methods=['GET'])
+def get_loyalty_balance(customer_phone):
+    """PHASE 6: Get customer's loyalty points balance."""
+    try:
+        points = loyalty_system.get_points_balance(customer_phone)
+        return jsonify({'customer_phone': customer_phone, 'loyalty_points': points})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/recurring-bookings', methods=['GET'])
+def get_recurring_bookings():
+    """PHASE 6: Get all active recurring bookings."""
+    try:
+        bookings = recurring_booking_manager.get_all_active_recurring_bookings()
+        return jsonify({'recurring_bookings': bookings, 'count': len(bookings)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/recurring-bookings/<customer_phone>', methods=['GET'])
+def get_customer_recurring_bookings(customer_phone):
+    """PHASE 6: Get customer's recurring bookings."""
+    try:
+        bookings = recurring_booking_manager.get_customer_recurring_bookings(customer_phone)
+        return jsonify({'customer_phone': customer_phone, 'recurring_bookings': bookings})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/waitlist', methods=['GET'])
+def get_waitlist():
+    """PHASE 6: Get all active waitlist entries."""
+    try:
+        entries = waitlist_manager.get_all_waitlist_entries()
+        return jsonify({'waitlist': entries, 'count': len(entries)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/waitlist/<facility_type>', methods=['GET'])
+def get_facility_waitlist(facility_type):
+    """PHASE 6: Get waitlist for a specific facility."""
+    try:
+        entries = waitlist_manager.get_waitlist_by_facility(facility_type)
+        return jsonify({
+            'facility_type': facility_type,
+            'waitlist': entries,
+            'count': len(entries)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/vip-customers', methods=['GET'])
+def get_vip_customers():
+    """PHASE 6: Get all VIP and Platinum customers."""
+    try:
+        query = """
+        SELECT phone, email, name, tier, total_bookings, total_spent_dollars, 
+               loyalty_points, vip_since, last_booking_at
+        FROM customers
+        WHERE tier IN ('vip', 'platinum')
+        ORDER BY tier DESC, total_spent_dollars DESC
+        """
+        
+        results = database.fetchall(query)
+        
+        vip_customers = []
+        for row in results:
+            vip_customers.append({
+                'phone': row[0] if isinstance(row, tuple) else row['phone'],
+                'email': row[1] if isinstance(row, tuple) else row['email'],
+                'name': row[2] if isinstance(row, tuple) else row['name'],
+                'tier': row[3] if isinstance(row, tuple) else row['tier'],
+                'total_bookings': row[4] if isinstance(row, tuple) else row['total_bookings'],
+                'total_spent': row[5] if isinstance(row, tuple) else row['total_spent_dollars'],
+                'loyalty_points': row[6] if isinstance(row, tuple) else row['loyalty_points'],
+                'vip_since': row[7] if isinstance(row, tuple) else row['vip_since'],
+                'last_booking': row[8] if isinstance(row, tuple) else row['last_booking_at']
+            })
+        
+        return jsonify({
+            'vip_customers': vip_customers,
+            'count': len(vip_customers)
+        })
+    except Exception as e:
+        logger.error(f"Error getting VIP customers: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/analytics/peak-times', methods=['GET'])
+def get_peak_times():
+    """PHASE 6: Get peak booking times analytics."""
+    try:
+        facility = request.args.get('facility')
+        analytics = peak_time_analyzer.get_peak_times(facility)
+        return jsonify(analytics)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/analytics/popular-facilities', methods=['GET'])
+def get_popular_facilities():
+    """PHASE 6: Get most popular facilities."""
+    try:
+        query = """
+        SELECT facility_type, SUM(booking_count) as total_bookings, 
+               SUM(revenue_dollars) as total_revenue
+        FROM booking_analytics
+        GROUP BY facility_type
+        ORDER BY total_bookings DESC
+        """
+        
+        results = database.fetchall(query)
+        
+        facilities = []
+        for row in results:
+            facilities.append({
+                'facility': row[0] if isinstance(row, tuple) else row['facility_type'],
+                'bookings': row[1] if isinstance(row, tuple) else row['total_bookings'],
+                'revenue': row[2] if isinstance(row, tuple) else row['total_revenue']
+            })
+        
+        return jsonify({'popular_facilities': facilities})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/emergency-bookings', methods=['GET'])
+def get_emergency_bookings():
+    """PHASE 6: Get all emergency bookings."""
+    try:
+        query = """
+        SELECT id, conversation_uuid, customer_phone, customer_name, 
+               facility_type, booking_date, booking_time, urgency_level, 
+               reason, status, created_at
+        FROM emergency_bookings
+        WHERE status = 'pending'
+        ORDER BY created_at DESC
+        """
+        
+        results = database.fetchall(query)
+        
+        emergency_bookings = []
+        for row in results:
+            emergency_bookings.append({
+                'id': row[0] if isinstance(row, tuple) else row['id'],
+                'conversation_uuid': row[1] if isinstance(row, tuple) else row['conversation_uuid'],
+                'customer_phone': row[2] if isinstance(row, tuple) else row['customer_phone'],
+                'customer_name': row[3] if isinstance(row, tuple) else row['customer_name'],
+                'facility_type': row[4] if isinstance(row, tuple) else row['facility_type'],
+                'booking_date': str(row[5]) if isinstance(row, tuple) else str(row['booking_date']),
+                'booking_time': str(row[6]) if isinstance(row, tuple) else str(row['booking_time']),
+                'urgency_level': row[7] if isinstance(row, tuple) else row['urgency_level'],
+                'reason': row[8] if isinstance(row, tuple) else row['reason'],
+                'status': row[9] if isinstance(row, tuple) else row['status'],
+                'created_at': str(row[10]) if isinstance(row, tuple) else str(row['created_at'])
+            })
+        
+        return jsonify({
+            'emergency_bookings': emergency_bookings,
+            'count': len(emergency_bookings)
+        })
+    except Exception as e:
+        logger.error(f"Error getting emergency bookings: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/group-bookings', methods=['GET'])
+def get_group_bookings():
+    """PHASE 6: Get all group bookings."""
+    try:
+        query = """
+        SELECT calcom_booking_id, customer_phone, coordinator_name, facility_type,
+               booking_date, booking_time, group_size, total_price, created_at
+        FROM group_bookings
+        ORDER BY booking_date DESC
+        LIMIT 50
+        """
+        
+        results = database.fetchall(query)
+        
+        group_bookings = []
+        for row in results:
+            group_bookings.append({
+                'booking_id': row[0] if isinstance(row, tuple) else row['calcom_booking_id'],
+                'customer_phone': row[1] if isinstance(row, tuple) else row['customer_phone'],
+                'coordinator': row[2] if isinstance(row, tuple) else row['coordinator_name'],
+                'facility': row[3] if isinstance(row, tuple) else row['facility_type'],
+                'date': str(row[4]) if isinstance(row, tuple) else str(row['booking_date']),
+                'time': str(row[5]) if isinstance(row, tuple) else str(row['booking_time']),
+                'group_size': row[6] if isinstance(row, tuple) else row['group_size'],
+                'total_price': row[7] if isinstance(row, tuple) else row['total_price'],
+                'created_at': str(row[8]) if isinstance(row, tuple) else str(row['created_at'])
+            })
+        
+        return jsonify({'group_bookings': group_bookings, 'count': len(group_bookings)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/stats/phase6', methods=['GET'])
+def get_phase6_stats():
+    """PHASE 6: Get comprehensive Phase 6 statistics."""
+    try:
+        stats = {
+            'vip_count': 0,
+            'platinum_count': 0,
+            'total_loyalty_points': 0,
+            'active_recurring_bookings': 0,
+            'waitlist_count': 0,
+            'group_bookings_today': 0,
+            'emergency_bookings_pending': 0
+        }
+        
+        # VIP counts
+        vip_query = "SELECT tier, COUNT(*) FROM customers GROUP BY tier"
+        vip_results = database.fetchall(vip_query)
+        for row in vip_results:
+            tier = row[0] if isinstance(row, tuple) else row['tier']
+            count = row[1] if isinstance(row, tuple) else row['count']
+            if tier == 'vip':
+                stats['vip_count'] = count
+            elif tier == 'platinum':
+                stats['platinum_count'] = count
+        
+        # Total loyalty points
+        points_query = "SELECT SUM(loyalty_points) FROM customers"
+        points_result = database.fetchone(points_query)
+        if points_result:
+            stats['total_loyalty_points'] = points_result[0] if isinstance(points_result, tuple) else points_result['sum'] or 0
+        
+        # Active recurring bookings
+        recurring_query = "SELECT COUNT(*) FROM recurring_bookings WHERE is_active = 1"
+        recurring_result = database.fetchone(recurring_query)
+        if recurring_result:
+            stats['active_recurring_bookings'] = recurring_result[0] if isinstance(recurring_result, tuple) else recurring_result['count']
+        
+        # Waitlist count
+        waitlist_query = "SELECT COUNT(*) FROM waitlist WHERE status = 'waiting'"
+        waitlist_result = database.fetchone(waitlist_query)
+        if waitlist_result:
+            stats['waitlist_count'] = waitlist_result[0] if isinstance(waitlist_result, tuple) else waitlist_result['count']
+        
+        # Emergency bookings pending
+        emergency_query = "SELECT COUNT(*) FROM emergency_bookings WHERE status = 'pending'"
+        emergency_result = database.fetchone(emergency_query)
+        if emergency_result:
+            stats['emergency_bookings_pending'] = emergency_result[0] if isinstance(emergency_result, tuple) else emergency_result['count']
+        
+        return jsonify(stats)
+    except Exception as e:
+        logger.error(f"Error getting Phase 6 stats: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
