@@ -52,6 +52,15 @@ BUSINESS_HOURS = {
 # Session storage (in production, use Redis or database)
 call_sessions = {}
 
+@app.route('/', methods=['GET'])
+def index():
+    """Root endpoint for health checks."""
+    return jsonify({
+        'status': 'running',
+        'service': 'Sports Facility Phone System',
+        'version': '1.0'
+    }), 200
+
 @app.route('/webhooks/answer', methods=['GET', 'POST'])
 def answer_call():
     """
