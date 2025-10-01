@@ -77,12 +77,33 @@ def answer_call():
         conversation_uuid = call_data.get('conversation_uuid', '')
         from_number = call_data.get('from', '')
         
-        # Initialize session
+        # Initialize session with complete structure
         call_sessions[conversation_uuid] = {
             'from_number': from_number,
             'state': 'greeting',
             'context': {},
-            'start_time': datetime.now()
+            'start_time': datetime.now(),
+            'booking_info': {
+                # Facility details
+                'facility_type': None,
+                'date': None,
+                'start_time': None,
+                'duration_hours': 1,
+                
+                # Customer details
+                'customer_name': None,
+                'customer_email': None,
+                'customer_phone': from_number,  # Get from caller ID
+                
+                # Booking status
+                'availability_checked': False,
+                'pricing_calculated': False,
+                'price': None,
+                'total_cost': None,
+                'details_confirmed': False,
+            },
+            'conversation_state': 'greeting',  # greeting, collecting_info, confirming, processing, completed
+            'clarification_attempts': 0
         }
         
         # Check business hours
@@ -205,6 +226,122 @@ def handle_speech():
         traceback.print_exc()
         return jsonify(create_error_ncco())
 
+def get_missing_required_fields(booking_info):
+    """Return list of fields that still need to be collected."""
+    required_fields = {
+        'facility_type': 'the type of facility you need',
+        'date': 'what date you want to book',
+        'start_time': 'what time you want to start',
+        'duration_hours': 'how long you need the facility',
+        'customer_name': 'your name',
+        'customer_email': 'your email address',
+    }
+    
+    missing = []
+    for field, description in required_fields.items():
+        if not booking_info.get(field) or (field == 'duration_hours' and not booking_info.get(field)):
+            missing.append({'field': field, 'description': description})
+    
+    # Duration defaults to 1, so only flag if explicitly needed
+    missing = [m for m in missing if m['field'] != 'duration_hours' or booking_info.get('duration_hours') is None]
+    
+    return missing
+
+def generate_collection_prompt(missing_fields):
+    """Generate natural prompt to collect missing information."""
+    if not missing_fields:
+        return None
+    
+    # Group by type
+    facility_fields = [f for f in missing_fields if f['field'] in ['facility_type', 'date', 'start_time', 'duration_hours']]
+    customer_fields = [f for f in missing_fields if f['field'] in ['customer_name', 'customer_email', 'customer_phone']]
+    
+    if facility_fields and customer_fields:
+        # Collect facility info first
+        if len(facility_fields) == 1:
+            return f"I'll need to know {facility_fields[0]['description']}."
+        elif len(facility_fields) == 2:
+            return f"I'll need to know {facility_fields[0]['description']} and {facility_fields[1]['description']}."
+        else:
+            return f"I'll need to know {facility_fields[0]['description']}, {facility_fields[1]['description']}, and {facility_fields[2]['description']}."
+    
+    elif facility_fields:
+        if len(facility_fields) == 1:
+            return f"I'll need to know {facility_fields[0]['description']}."
+        elif len(facility_fields) == 2:
+            return f"I'll need to know {facility_fields[0]['description']} and {facility_fields[1]['description']}."
+        else:
+            return f"I'll need to know {facility_fields[0]['description']}, {facility_fields[1]['description']}, and {facility_fields[2]['description']}."
+    
+    elif customer_fields:
+        if len(customer_fields) == 1:
+            return f"I'll need {customer_fields[0]['description']} to complete the booking."
+        else:
+            return f"I'll need {customer_fields[0]['description']} and {customer_fields[1]['description']} to complete the booking."
+    
+    return None
+
+def update_booking_info_from_entities(booking_info, entities):
+    """Update booking info with extracted entities."""
+    # Map entity keys to booking_info keys
+    if entities.get('service_type'):
+        booking_info['facility_type'] = entities['service_type']
+    
+    if entities.get('date_time'):
+        # Parse date_time into date and start_time
+        try:
+            dt = datetime.strptime(entities['date_time'], '%Y-%m-%d %H:%M')
+            booking_info['date'] = dt.strftime('%Y-%m-%d')
+            booking_info['start_time'] = dt.strftime('%H:%M')
+        except:
+            pass
+    
+    if entities.get('duration'):
+        booking_info['duration_hours'] = entities['duration']
+    
+    if entities.get('email'):
+        booking_info['customer_email'] = entities['email']
+    
+    if entities.get('name'):
+        booking_info['customer_name'] = entities['name']
+    
+    if entities.get('phone'):
+        booking_info['customer_phone'] = entities['phone']
+    
+    return booking_info
+
+def generate_confirmation_text(booking_info):
+    """Generate confirmation text with all booking details."""
+    # Format date nicely
+    try:
+        date_obj = datetime.strptime(booking_info['date'], '%Y-%m-%d')
+        formatted_date = date_obj.strftime('%A, %B %d, %Y')
+    except:
+        formatted_date = booking_info['date']
+    
+    # Format time nicely (convert 24h to 12h)
+    try:
+        time_obj = datetime.strptime(booking_info['start_time'], '%H:%M')
+        formatted_time = time_obj.strftime('%I:%M %p').lstrip('0')
+    except:
+        formatted_time = booking_info['start_time']
+    
+    facility_name = booking_info['facility_type'].replace('_', ' ').title()
+    
+    confirmation = f"""Let me confirm your booking details.
+
+{facility_name} for {booking_info['duration_hours']} hour{'s' if booking_info['duration_hours'] > 1 else ''} on {formatted_date} at {formatted_time}.
+
+The total cost is ${booking_info['total_cost']}.
+
+Name: {booking_info['customer_name']}
+Email: {booking_info['customer_email']}
+Phone: {booking_info['customer_phone']}
+
+Is everything correct?"""
+    
+    return confirmation
+
 def handle_intent(nlu_result, session):
     """Route to appropriate handler based on detected intent."""
     intent = nlu_result.get('intent', 'unknown')
@@ -300,132 +437,220 @@ def handle_availability_inquiry(entities, session):
         return create_speech_input_ncco(response_text, 'availability_alternatives')
 
 def handle_booking_request(entities, session):
-    """Handle booking requests."""
-    # Get service type from entities or context
-    service_type = entities.get('service_type') or session['context'].get('service_type')
-    date_time = entities.get('date_time') or session['context'].get('date_time')
-    
+    """Handle booking requests with complete information collection."""
     print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print(f"🎯 BOOKING REQUEST HANDLER")
-    print(f"Service: {service_type}, DateTime: {date_time}")
-    print(f"Session State: {session.get('state')}")
-    print(f"Session Context: {session['context']}")
+    print(f"Entities: {entities}")
+    print(f"Conversation State: {session.get('conversation_state')}")
+    print(f"Booking Info: {session.get('booking_info', {})}")
     print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     
-    # If we have a proposed booking in context, confirm and create it
-    if 'proposed_booking' in session['context']:
-        booking_details = session['context']['proposed_booking']
-        
-        # Create the booking
-        booking_result = calendar_helper.create_booking(
-            booking_details['date_time'],
-            booking_details['service_type'],
-            session['from_number'],
-            booking_details['rate'],
-            booking_details.get('duration', 1)
-        )
-        
-        if booking_result['success']:
-            response_text = f"Perfect! I've reserved {booking_details['service_type'].replace('_', ' ')} for {booking_details['date_time']} at ${booking_details['rate']} per hour. Your booking confirmation is {booking_result['booking_id']}. You'll receive a confirmation text shortly. Is there anything else I can help you with?"
-            # Clear the proposed booking
-            session['context'].pop('proposed_booking', None)
-            session['state'] = 'booking_complete'
-            return create_speech_input_ncco(response_text, 'booking_complete')
-        else:
-            # Check if it's a double booking error
-            error_details = booking_result.get('details', '').lower()
-            is_double_booking = any(keyword in error_details for keyword in 
-                ['already booked', 'not available', 'conflict', 'occupied', 'unavailable'])
-            
-            if is_double_booking:
-                # Slot was taken between availability check and booking creation
-                response_text = f"I apologize, but that time slot for {booking_details['date_time']} is no longer available. It was just booked by someone else. "
-                
-                # Get alternative times
-                try:
-                    requested_datetime = datetime.strptime(booking_details['date_time'], '%Y-%m-%d %H:%M')
-                    alternatives = calendar_helper._get_alternative_times(
-                        requested_datetime, 
-                        booking_details.get('duration', 1),
-                        3,
-                        booking_details['service_type']
-                    )
-                    
-                    if alternatives:
-                        response_text += f"I have availability on {alternatives[0]}. Would that work for you?"
-                        # Clear the old proposed booking
-                        session['context'].pop('proposed_booking', None)
-                        session['state'] = 'booking_alternative'
-                        return create_speech_input_ncco(response_text, 'booking_alternative')
-                    else:
-                        response_text += "Would you like to try a different date or time?"
-                        session['context'].pop('proposed_booking', None)
-                        session['state'] = 'booking_retry'
-                        return create_speech_input_ncco(response_text, 'booking_retry')
-                except:
-                    response_text += "Would you like to try a different date or time?"
-                    session['context'].pop('proposed_booking', None)
-                    session['state'] = 'booking_retry'
-                    return create_speech_input_ncco(response_text, 'booking_retry')
-            else:
-                # Some other error - transfer to staff
-                response_text = "I'm sorry, there was a technical issue creating your booking. Let me transfer you to our staff who can help you complete this booking."
-                return escalation_handler.create_escalation_ncco('booking_error', entities)
+    # Get or initialize booking_info
+    booking_info = session.get('booking_info', {})
     
-    # Check if we have both service type and date/time
-    if service_type and date_time:
-        # We have all the info we need! Check availability
-        duration = entities.get('duration', 1)
+    # Update booking info with any new entities
+    booking_info = update_booking_info_from_entities(booking_info, entities)
+    session['booking_info'] = booking_info
+    
+    # Handle confirmation state
+    if session.get('conversation_state') == 'confirming':
+        confirmation = entities.get('confirmation')
+        if confirmation is True:
+            # User confirmed - process booking
+            return process_confirmed_booking(booking_info, session)
+        elif confirmation is False:
+            # User declined
+            response_text = "No problem! What would you like to change?"
+            session['conversation_state'] = 'collecting_info'
+            booking_info['details_confirmed'] = False
+            return create_speech_input_ncco(response_text, 'change_details')
+        else:
+            # Unclear response, ask again
+            confirmation_text = generate_confirmation_text(booking_info)
+            return create_speech_input_ncco(confirmation_text, 'confirming', allow_barge_in=False)
+    
+    # Check if we have all facility information
+    facility_fields_complete = all([
+        booking_info.get('facility_type'),
+        booking_info.get('date'),
+        booking_info.get('start_time'),
+        booking_info.get('duration_hours')
+    ])
+    
+    # If facility info is complete but availability not checked, check it now
+    if facility_fields_complete and not booking_info.get('availability_checked'):
+        print(f"✅ Facility info complete! Checking availability...")
         
-        print(f"✅ Have both service_type and date_time! Checking availability...")
-        print(f"   Service: {service_type}, DateTime: {date_time}, Duration: {duration}h")
+        # Reconstruct date_time
+        date_time_str = f"{booking_info['date']} {booking_info['start_time']}"
         
-        availability = calendar_helper.check_availability(date_time, service_type, duration)
+        availability = calendar_helper.check_availability(
+            date_time_str, 
+            booking_info['facility_type'], 
+            booking_info['duration_hours']
+        )
         
         print(f"📊 Availability result: {availability}")
         
         if availability['available']:
-            # Store the proposed booking
-            session['context']['proposed_booking'] = {
-                'service_type': service_type,
-                'date_time': date_time,
-                'rate': availability['rate'],
-                'duration': duration,
-                'total_cost': availability['total_cost']
-            }
+            # Mark as checked and store pricing
+            booking_info['availability_checked'] = True
+            booking_info['pricing_calculated'] = True
+            booking_info['price'] = availability['rate']
+            booking_info['total_cost'] = availability['total_cost']
+            session['booking_info'] = booking_info
             
-            response_text = f"Great! I can book a {service_type.replace('_', ' ')} court for {date_time} at ${availability['rate']} per hour for {duration} hour(s). That's a total of ${availability['total_cost']}. Shall I go ahead and reserve that for you?"
-            session['state'] = 'booking_confirmation'
-            return create_speech_input_ncco(response_text, 'booking_confirmation')
+            # Now check if we have customer info
+            customer_fields_complete = all([
+                booking_info.get('customer_name'),
+                booking_info.get('customer_email')
+            ])
+            
+            if customer_fields_complete:
+                # Everything ready - show confirmation
+                confirmation_text = generate_confirmation_text(booking_info)
+                session['conversation_state'] = 'confirming'
+                return create_speech_input_ncco(confirmation_text, 'confirming', allow_barge_in=False)
+            else:
+                # Need customer info
+                missing_fields = get_missing_required_fields(booking_info)
+                customer_missing = [f for f in missing_fields if f['field'] in ['customer_name', 'customer_email']]
+                
+                if customer_missing:
+                    prompt = generate_collection_prompt(customer_missing)
+                    session['conversation_state'] = 'collecting_info'
+                    return create_speech_input_ncco(prompt, 'collecting_customer_info')
         else:
+            # Slot not available - offer alternatives
             reason = availability.get('reason', 'not available')
             response_text = f"I'm sorry, that time slot is {reason}. "
             
             alternatives = availability.get('alternatives', [])
             if alternatives:
                 response_text += f"I have availability on {alternatives[0]}. Would that work for you?"
+                # Reset availability check
+                booking_info['availability_checked'] = False
+                session['booking_info'] = booking_info
+                session['conversation_state'] = 'collecting_info'
+                return create_speech_input_ncco(response_text, 'alternative_offered')
             else:
-                response_text = "Let me transfer you to our staff to find an available time."
-                return escalation_handler.create_escalation_ncco('no_availability', entities)
-            
-            return create_speech_input_ncco(response_text, 'booking_alternative')
+                response_text += "Would you like to try a different date or time?"
+                booking_info['availability_checked'] = False
+                session['booking_info'] = booking_info
+                session['conversation_state'] = 'collecting_info'
+                return create_speech_input_ncco(response_text, 'no_alternatives')
     
-    # Missing information - ask for what we need
-    if not service_type:
-        response_text = "I'd be happy to help you make a booking. What type of activity are you planning - basketball, multi-sport, or a birthday party?"
-        session['state'] = 'need_service_type'
-        return create_speech_input_ncco(response_text, 'need_service_type')
-    elif not date_time:
-        response_text = f"Perfect! For {service_type.replace('_', ' ')}, what date and time work best for you?"
-        # Store service type in context
-        session['context']['service_type'] = service_type
-        session['state'] = 'need_date_time'
-        return create_speech_input_ncco(response_text, 'need_date_time')
-    else:
-        # Shouldn't reach here, but just in case
-        response_text = "I'd be happy to help you make a booking. What type of activity and what date/time would you like?"
-        session['state'] = 'booking_details_needed'
-        return create_speech_input_ncco(response_text, 'booking_details_needed')
+    # Missing facility information - collect it
+    missing_fields = get_missing_required_fields(booking_info)
+    
+    if missing_fields:
+        prompt = generate_collection_prompt(missing_fields)
+        session['conversation_state'] = 'collecting_info'
+        return create_speech_input_ncco(prompt, 'collecting_info')
+    
+    # Shouldn't reach here, but just in case
+    response_text = "I'd be happy to help you make a booking. What type of facility would you like to book?"
+    session['conversation_state'] = 'collecting_info'
+    return create_speech_input_ncco(response_text, 'booking_start')
+
+def process_confirmed_booking(booking_info, session):
+    """Process a confirmed booking and send confirmation."""
+    print(f"📝 PROCESSING CONFIRMED BOOKING")
+    print(f"Booking Info: {booking_info}")
+    
+    try:
+        # Reconstruct date_time for Cal.com
+        date_time_str = f"{booking_info['date']} {booking_info['start_time']}"
+        
+        # Create booking with customer info
+        booking_result = calendar_helper.create_booking(
+            date_time_str,
+            booking_info['facility_type'],
+            booking_info['customer_phone'],
+            booking_info['price'],
+            booking_info['duration_hours'],
+            customer_name=booking_info.get('customer_name', ''),
+            customer_email=booking_info.get('customer_email', '')
+        )
+        
+        if booking_result['success']:
+            booking_id = booking_result.get('booking_id', 'N/A')
+            
+            # Format response
+            facility_name = booking_info['facility_type'].replace('_', ' ').title()
+            try:
+                date_obj = datetime.strptime(booking_info['date'], '%Y-%m-%d')
+                formatted_date = date_obj.strftime('%A, %B %d')
+            except:
+                formatted_date = booking_info['date']
+            
+            try:
+                time_obj = datetime.strptime(booking_info['start_time'], '%H:%M')
+                formatted_time = time_obj.strftime('%I:%M %p').lstrip('0')
+            except:
+                formatted_time = booking_info['start_time']
+            
+            response_text = f"""Perfect! I've confirmed your booking for {facility_name} on {formatted_date} at {formatted_time} for {booking_info['duration_hours']} hour{'s' if booking_info['duration_hours'] > 1 else ''}.
+
+Your booking reference number is {booking_id}.
+
+I'll send a confirmation email to {booking_info['customer_email']} with all the details.
+
+Is there anything else I can help you with?"""
+            
+            # Mark session as complete
+            session['conversation_state'] = 'completed'
+            session['state'] = 'booking_complete'
+            
+            return create_speech_input_ncco(response_text, 'booking_complete', allow_barge_in=False)
+        
+        else:
+            # Booking failed - check if it's a double booking
+            error_details = booking_result.get('details', '').lower()
+            is_double_booking = any(keyword in error_details for keyword in 
+                ['already booked', 'not available', 'conflict', 'occupied', 'unavailable'])
+            
+            if is_double_booking:
+                response_text = f"I apologize, but that time slot just became unavailable. Let me check for alternative times. "
+                
+                # Get alternatives
+                try:
+                    requested_datetime = datetime.strptime(date_time_str, '%Y-%m-%d %H:%M')
+                    alternatives = calendar_helper._get_alternative_times(
+                        requested_datetime, 
+                        booking_info['duration_hours'],
+                        3,
+                        booking_info['facility_type']
+                    )
+                    
+                    if alternatives:
+                        response_text += f"I have availability on {alternatives[0]}. Would that work for you?"
+                        # Reset for new booking
+                        booking_info['availability_checked'] = False
+                        booking_info['details_confirmed'] = False
+                        session['booking_info'] = booking_info
+                        session['conversation_state'] = 'collecting_info'
+                        return create_speech_input_ncco(response_text, 'booking_alternative')
+                except Exception as e:
+                    print(f"Error getting alternatives: {e}")
+                
+                response_text += "Would you like to try a different date or time?"
+                booking_info['availability_checked'] = False
+                booking_info['details_confirmed'] = False
+                session['booking_info'] = booking_info
+                session['conversation_state'] = 'collecting_info'
+                return create_speech_input_ncco(response_text, 'booking_retry')
+            else:
+                # Some other error
+                response_text = "I'm sorry, there was a technical issue processing your booking. Let me transfer you to our staff who can help."
+                return escalation_handler.create_escalation_ncco('booking_error', {})
+    
+    except Exception as e:
+        print(f"ERROR in process_confirmed_booking: {e}")
+        import traceback
+        traceback.print_exc()
+        response_text = "I'm sorry, there was a technical issue. Let me connect you with our staff for assistance."
+        return escalation_handler.create_escalation_ncco('booking_error', {})
 
 def handle_general_info(entities, session):
     """Handle general information requests."""

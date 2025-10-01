@@ -93,6 +93,21 @@ class SportsRentalNLU:
             'duration': r'\b(\d+).*(?:hours?|hrs?)\b',
             'specific_time': r'\b(\d{1,2})(?::(\d{2}))?\s*([ap]m?)\b'
         }
+        
+        # Email pattern
+        self.email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+        
+        # Name patterns
+        self.name_patterns = [
+            r"(?:my name is|i'm|this is|i am|name's)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",
+            r"(?:my name is|i'm|this is|i am|name's)\s+([A-Z][a-z]+)",  # Just first name
+        ]
+        
+        # Phone patterns
+        self.phone_patterns = [
+            r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',  # 123-456-7890 or 1234567890
+            r'\(\d{3}\)\s*\d{3}[-.]?\d{4}',     # (123) 456-7890
+        ]
 
     def process_speech_input(self, speech_text: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -179,6 +194,19 @@ class SportsRentalNLU:
         confirmation = self._extract_confirmation(speech_text)
         if confirmation:
             entities['confirmation'] = confirmation
+        
+        # Extract customer information
+        email = self._extract_email(speech_text)
+        if email:
+            entities['email'] = email
+        
+        name = self._extract_name(speech_text)
+        if name:
+            entities['name'] = name
+        
+        phone = self._extract_phone(speech_text)
+        if phone:
+            entities['phone'] = phone
         
         return entities
     
@@ -319,6 +347,36 @@ class SportsRentalNLU:
     def _matches_pattern(self, text: str, pattern: str) -> bool:
         """Check if text matches a regex pattern."""
         return bool(re.search(pattern, text, re.IGNORECASE))
+    
+    def _extract_email(self, speech_text: str) -> Optional[str]:
+        """Extract email address from speech text."""
+        match = re.search(self.email_pattern, speech_text, re.IGNORECASE)
+        if match:
+            return match.group(0).lower()
+        return None
+    
+    def _extract_name(self, speech_text: str) -> Optional[str]:
+        """Extract customer name from speech text."""
+        for pattern in self.name_patterns:
+            match = re.search(pattern, speech_text, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip()
+                # Capitalize properly (handle "john smith" -> "John Smith")
+                return ' '.join(word.capitalize() for word in name.split())
+        return None
+    
+    def _extract_phone(self, speech_text: str) -> Optional[str]:
+        """Extract phone number from speech text."""
+        for pattern in self.phone_patterns:
+            match = re.search(pattern, speech_text)
+            if match:
+                # Normalize to just digits
+                phone = re.sub(r'[^\d]', '', match.group(0))
+                # Return in standard format
+                if len(phone) == 10:
+                    return f"({phone[:3]}) {phone[3:6]}-{phone[6:]}"
+                return phone
+        return None
     
     def _resolve_time_reference(self, time_ref: str, specific_time: str = None) -> str:
         """Convert relative time reference to actual datetime string."""

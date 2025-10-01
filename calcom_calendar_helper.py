@@ -188,7 +188,8 @@ class CalcomCalendarHelper:
     
     def create_booking(self, date_time_str: str, service_type: str, 
                       customer_phone: str, hourly_rate: float, 
-                      duration_hours: int = 1, customer_name: str = None) -> Dict[str, Any]:
+                      duration_hours: int = 1, customer_name: str = None, 
+                      customer_email: str = None) -> Dict[str, Any]:
         """
         Create a booking using Cal.com API.
         
@@ -199,6 +200,7 @@ class CalcomCalendarHelper:
             hourly_rate: Rate per hour
             duration_hours: Duration in hours
             customer_name: Optional customer name
+            customer_email: Optional customer email
             
         Returns:
             Dictionary with booking result
@@ -219,9 +221,10 @@ class CalcomCalendarHelper:
             # Create booking details
             total_cost = hourly_rate * duration_hours
             
-            # Generate a unique email for the booking
-            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            customer_email = f'booking-{timestamp}@basketballfactory.local'
+            # Use provided email or generate a unique one
+            if not customer_email:
+                timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                customer_email = f'booking-{timestamp}@basketballfactory.local'
             
             booking_notes = f"""Basketball Court Booking
 Service: {service_type.replace('_', ' ').title()}
@@ -229,6 +232,7 @@ Duration: {duration_hours} hour(s)
 Rate: ${hourly_rate}/hour
 Total: ${total_cost}
 Phone: {customer_phone}
+Email: {customer_email}
 Booked via phone system at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
             
             # Create booking payload - use the format that works
@@ -248,6 +252,7 @@ Booked via phone system at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
                     'duration_hours': str(duration_hours),
                     'total_cost': str(total_cost),
                     'customer_phone': customer_phone,
+                    'customer_email': customer_email,
                     'booking_source': 'phone_system'
                 }
             }
@@ -257,6 +262,7 @@ Booked via phone system at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
             print(f"   Date/Time: {date_time_str}")
             print(f"   Service: {service_type}")
             print(f"   Customer: {customer_name or 'Phone Customer'}")
+            print(f"   Email: {customer_email}")
             print(f"   Phone: {customer_phone}")
             print(f"   Rate: ${hourly_rate}/hour x {duration_hours} hours = ${total_cost}")
             
