@@ -200,7 +200,37 @@ def handle_intent(nlu_result, session):
     """Route to appropriate handler based on detected intent."""
     intent = nlu_result.get('intent', 'unknown')
     entities = nlu_result.get('entities', {})
+    current_state = session.get('state', '')
     
+    print(f"Intent: {intent}, State: {current_state}, Entities: {entities}")
+    
+    # Handle context-aware responses
+    # If we're waiting for specific info and user provides it, continue the booking flow
+    if current_state == 'need_service_type' and entities.get('service_type'):
+        # User provided service type, continue with booking
+        return handle_booking_request(entities, session)
+    elif current_state == 'need_date_time' and entities.get('date_time'):
+        # User provided date/time, continue with booking
+        return handle_booking_request(entities, session)
+    elif current_state == 'booking_confirmation':
+        # User is confirming/declining a booking
+        confirmation = entities.get('confirmation')
+        if confirmation is True:
+            # User said yes, create the booking
+            return handle_booking_request(entities, session)
+        elif confirmation is False:
+            # User said no
+            response_text = "No problem! Would you like to try a different date or time?"
+            session['context'].pop('proposed_booking', None)
+            return create_speech_input_ncco(response_text, 'booking_restart')
+        else:
+            # Didn't understand, ask again
+            if 'proposed_booking' in session['context']:
+                booking = session['context']['proposed_booking']
+                response_text = f"Just to confirm, would you like me to book {booking['service_type'].replace('_', ' ')} for {booking['date_time']} at ${booking['total_cost']}? Please say yes or no."
+                return create_speech_input_ncco(response_text, 'booking_confirmation')
+    
+    # Handle primary intents
     if intent == 'pricing':
         return handle_pricing_inquiry(entities, session)
     elif intent == 'availability':
@@ -212,7 +242,12 @@ def handle_intent(nlu_result, session):
     elif intent == 'payment_issue' or intent == 'complex_booking':
         return escalation_handler.create_escalation_ncco(intent, entities)
     else:
-        return create_clarification_ncco()
+        # Unknown intent - check if we have useful entities anyway
+        if entities.get('service_type') or entities.get('date_time'):
+            # User mentioned booking details even if intent unclear
+            return handle_booking_request(entities, session)
+        else:
+            return create_clarification_ncco()
 
 def handle_pricing_inquiry(entities, session):
     """Handle pricing-related questions."""
@@ -257,8 +292,14 @@ def handle_availability_inquiry(entities, session):
 
 def handle_booking_request(entities, session):
     """Handle booking requests."""
+    # Get service type from entities or context
+    service_type = entities.get('service_type') or session['context'].get('service_type')
+    date_time = entities.get('date_time') or session['context'].get('date_time')
+    
+    print(f"Booking request - Service: {service_type}, DateTime: {date_time}")
+    
+    # If we have a proposed booking in context, confirm and create it
     if 'proposed_booking' in session['context']:
-        # Confirm the previously discussed booking
         booking_details = session['context']['proposed_booking']
         
         # Create the booking
@@ -266,18 +307,65 @@ def handle_booking_request(entities, session):
             booking_details['date_time'],
             booking_details['service_type'],
             session['from_number'],
-            booking_details['rate']
+            booking_details['rate'],
+            booking_details.get('duration', 1)
         )
         
         if booking_result['success']:
-            response_text = f"Perfect! I've reserved {booking_details['service_type']} for {booking_details['date_time']} at ${booking_details['rate']} per hour. Your booking confirmation is {booking_result['booking_id']}. You'll receive a confirmation text shortly. Is there anything else I can help you with?"
+            response_text = f"Perfect! I've reserved {booking_details['service_type'].replace('_', ' ')} for {booking_details['date_time']} at ${booking_details['rate']} per hour. Your booking confirmation is {booking_result['booking_id']}. You'll receive a confirmation text shortly. Is there anything else I can help you with?"
             return create_speech_input_ncco(response_text, 'booking_complete')
         else:
             response_text = "I'm sorry, there was an issue creating your booking. Let me transfer you to our staff for assistance."
             return escalation_handler.create_escalation_ncco('booking_error', entities)
+    
+    # Check if we have both service type and date/time
+    if service_type and date_time:
+        # We have all the info we need! Check availability
+        duration = entities.get('duration', 1)
+        
+        availability = calendar_helper.check_availability(date_time, service_type, duration)
+        
+        if availability['available']:
+            # Store the proposed booking
+            session['context']['proposed_booking'] = {
+                'service_type': service_type,
+                'date_time': date_time,
+                'rate': availability['rate'],
+                'duration': duration,
+                'total_cost': availability['total_cost']
+            }
+            
+            response_text = f"Great! I can book a {service_type.replace('_', ' ')} court for {date_time} at ${availability['rate']} per hour for {duration} hour(s). That's a total of ${availability['total_cost']}. Shall I go ahead and reserve that for you?"
+            session['state'] = 'booking_confirmation'
+            return create_speech_input_ncco(response_text, 'booking_confirmation')
+        else:
+            reason = availability.get('reason', 'not available')
+            response_text = f"I'm sorry, that time slot is {reason}. "
+            
+            alternatives = availability.get('alternatives', [])
+            if alternatives:
+                response_text += f"I have availability on {alternatives[0]}. Would that work for you?"
+            else:
+                response_text = "Let me transfer you to our staff to find an available time."
+                return escalation_handler.create_escalation_ncco('no_availability', entities)
+            
+            return create_speech_input_ncco(response_text, 'booking_alternative')
+    
+    # Missing information - ask for what we need
+    if not service_type:
+        response_text = "I'd be happy to help you make a booking. What type of activity are you planning - basketball, multi-sport, or a birthday party?"
+        session['state'] = 'need_service_type'
+        return create_speech_input_ncco(response_text, 'need_service_type')
+    elif not date_time:
+        response_text = f"Perfect! For {service_type.replace('_', ' ')}, what date and time work best for you?"
+        # Store service type in context
+        session['context']['service_type'] = service_type
+        session['state'] = 'need_date_time'
+        return create_speech_input_ncco(response_text, 'need_date_time')
     else:
-        # Need more information for booking
-        response_text = "I'd be happy to help you make a booking. What type of activity are you planning - basketball, multi-sport, or a birthday party? And what date and time work best for you?"
+        # Shouldn't reach here, but just in case
+        response_text = "I'd be happy to help you make a booking. What type of activity and what date/time would you like?"
+        session['state'] = 'booking_details_needed'
         return create_speech_input_ncco(response_text, 'booking_details_needed')
 
 def handle_general_info(entities, session):
