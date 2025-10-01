@@ -21,6 +21,7 @@ import os
 import json
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, Response
+from flask_cors import CORS
 from dotenv import load_dotenv
 from vonage import Vonage, Auth
 from nlu import SportsRentalNLU
@@ -41,6 +42,8 @@ from monitoring.health_checks import health_check_service
 load_dotenv()
 
 app = Flask(__name__)
+# Enable CORS for all routes to allow dashboard to connect
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Get base URL for webhooks (use environment variable or default to request)
 BASE_URL = os.getenv('BASE_URL', 'https://phone-system-backend.onrender.com')
