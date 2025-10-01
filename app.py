@@ -9,7 +9,7 @@ import json
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-import vonage
+from vonage import Vonage, Auth
 from nlu import SportsRentalNLU
 from calcom_calendar_helper import CalcomCalendarHelper
 from pricing import PricingEngine
@@ -28,12 +28,13 @@ escalation_handler = EscalationHandler()
 
 # Initialize Vonage client
 try:
-    vonage_client = vonage.Client(
-        key=os.getenv('VONAGE_API_KEY'),
-        secret=os.getenv('VONAGE_API_SECRET'),
-        application_id=os.getenv('VONAGE_APPLICATION_ID'),
-        private_key=os.getenv('VONAGE_PRIVATE_KEY_PATH')
+    vonage_client = Vonage(
+        Auth(
+            api_key=os.getenv('VONAGE_API_KEY'),
+            api_secret=os.getenv('VONAGE_API_SECRET')
+        )
     )
+    print("✓ Vonage client initialized successfully")
 except Exception as e:
     print(f"Warning: Vonage client initialization failed: {e}")
     vonage_client = None
