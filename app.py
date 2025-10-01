@@ -296,7 +296,12 @@ def handle_booking_request(entities, session):
     service_type = entities.get('service_type') or session['context'].get('service_type')
     date_time = entities.get('date_time') or session['context'].get('date_time')
     
-    print(f"Booking request - Service: {service_type}, DateTime: {date_time}")
+    print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print(f"🎯 BOOKING REQUEST HANDLER")
+    print(f"Service: {service_type}, DateTime: {date_time}")
+    print(f"Session State: {session.get('state')}")
+    print(f"Session Context: {session['context']}")
+    print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     
     # If we have a proposed booking in context, confirm and create it
     if 'proposed_booking' in session['context']:
@@ -323,7 +328,12 @@ def handle_booking_request(entities, session):
         # We have all the info we need! Check availability
         duration = entities.get('duration', 1)
         
+        print(f"✅ Have both service_type and date_time! Checking availability...")
+        print(f"   Service: {service_type}, DateTime: {date_time}, Duration: {duration}h")
+        
         availability = calendar_helper.check_availability(date_time, service_type, duration)
+        
+        print(f"📊 Availability result: {availability}")
         
         if availability['available']:
             # Store the proposed booking
