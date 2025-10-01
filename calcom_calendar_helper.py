@@ -97,45 +97,51 @@ class CalcomCalendarHelper:
                     'alternatives': self._get_alternative_times(requested_datetime, duration_hours)
                 }
             
-            # Format for Cal.com API (ISO format)
-            start_time = requested_datetime.isoformat()
-            end_time = end_datetime.isoformat()
-            
-            # For now, assume availability based on business hours
-            # In production, this would check Cal.com's actual availability
             print(f"🔍 Checking availability for {date_time_str} ({service_type})")
             
-            # Simple check: if time is in business hours, it's available
-            # You can enhance this later to check actual Cal.com bookings
-            slot_available = True
+            # Get day start and end for the requested date
+            day_start = requested_datetime.replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = requested_datetime.replace(hour=23, minute=59, second=59, microsecond=999999)
             
-            # Optional: Try to check actual Cal.com availability (may fail if event type not configured)
-            try:
-                availability_params = {
-                    'dateFrom': start_time,
-                    'dateTo': end_time,
-                    'eventTypeId': self.event_type_id or 1,
-                    'timezone': self.facility_timezone
-                }
-                
-                response = self._make_request('GET', '/availability', availability_params)
-                
-                if response.status_code == 200:
-                    availability_data = response.json()
-                    available_slots = availability_data.get('slots', [])
-                    print(f"   Cal.com returned {len(available_slots)} available slots")
-                    
-                    # If Cal.com returns data, use it
-                    if len(available_slots) == 0:
-                        slot_available = False
-                else:
-                    print(f"   Cal.com availability check returned {response.status_code}, assuming available")
-                    # If API call fails, assume available (fail-open for better UX)
-                    slot_available = True
-            except Exception as api_error:
-                print(f"   Cal.com API error: {api_error}, assuming available")
-                # If API fails, assume available
+            # Check availability using Cal.com's v2 availability endpoint
+            availability_url = "https://api.cal.com/v2/slots/available"
+            availability_params = {
+                'apiKey': self.api_token,
+                'startTime': day_start.isoformat(),
+                'endTime': day_end.isoformat(),
+                'eventTypeId': self.event_type_id or 3503822
+            }
+            
+            response = requests.get(availability_url, params=availability_params)
+            
+            if response.status_code != 200:
+                print(f"   Cal.com availability check returned {response.status_code}, assuming available")
+                # If API call fails, assume available (fail-open for better UX)
                 slot_available = True
+            else:
+                availability_data = response.json()
+                
+                # Get available slots for the requested date
+                date_str = requested_datetime.strftime('%Y-%m-%d')
+                available_slots = availability_data.get('data', {}).get('slots', {}).get(date_str, [])
+                
+                print(f"   Cal.com returned {len(available_slots)} available slots")
+                
+                # Check if any available slot matches our requested time
+                slot_available = False
+                for slot in available_slots:
+                    slot_time_str = slot.get('time', '')
+                    # Parse the slot time (format: "2025-10-02T15:00:00.000Z")
+                    try:
+                        slot_datetime = datetime.fromisoformat(slot_time_str.replace('Z', '+00:00'))
+                        
+                        # Check if slot time matches requested time (within 15 minutes)
+                        time_diff = abs((slot_datetime.replace(tzinfo=None) - requested_datetime).total_seconds())
+                        if time_diff < 900:  # 15 minutes
+                            slot_available = True
+                            break
+                    except:
+                        continue
             
             if not slot_available:
                 return {
@@ -192,95 +198,92 @@ class CalcomCalendarHelper:
         try:
             # Parse the date/time
             start_datetime = datetime.strptime(date_time_str, '%Y-%m-%d %H:%M')
-            end_datetime = start_datetime + timedelta(hours=duration_hours)
             
-            # Format for Cal.com API
+            # Format for Cal.com API (ISO format without timezone)
             start_time = start_datetime.isoformat()
-            end_time = end_datetime.isoformat()
             
             # Create booking details
             total_cost = hourly_rate * duration_hours
             
-            booking_title = f"{service_type.replace('_', ' ').title()} Rental"
-            if customer_name:
-                booking_title += f" - {customer_name}"
+            # Generate a unique email for the booking
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            customer_email = f'booking-{timestamp}@basketballfactory.local'
             
-            booking_notes = f"""
-Booking Details:
-- Service: {service_type.replace('_', ' ').title()}
-- Duration: {duration_hours} hour(s)
-- Rate: ${hourly_rate}/hour
-- Total Cost: ${total_cost}
-- Customer Phone: {customer_phone}
-- Booked via: Automated Phone System
-- Booking Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            """.strip()
+            booking_notes = f"""Basketball Court Booking
+Service: {service_type.replace('_', ' ').title()}
+Duration: {duration_hours} hour(s)
+Rate: ${hourly_rate}/hour
+Total: ${total_cost}
+Phone: {customer_phone}
+Booked via phone system at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
             
-            # Create booking payload (Cal.com API v1 format)
-            # Note: Cal.com requires a valid email format
-            booking_email = f'phone-booking-{datetime.now().strftime("%Y%m%d%H%M%S")}@sports-facility.com'
-            
+            # Create booking payload - use the format that works
             booking_data = {
-                'start': start_time,  # Required field, correct name
-                'eventTypeId': int(self.event_type_id) if self.event_type_id else 1,  # Ensure integer
-                'timeZone': self.facility_timezone,  # Correct camelCase
-                'language': 'en',  # Required field
-                'name': customer_name or 'Phone Customer',  # Add name at top level
-                'email': booking_email,  # Add email at top level
+                'eventTypeId': int(self.event_type_id) if self.event_type_id else 3503822,
+                'start': start_time,
                 'responses': {
                     'name': customer_name or 'Phone Customer',
-                    'email': booking_email,
-                    'phone': customer_phone or '',
+                    'email': customer_email,
                     'notes': booking_notes
                 },
+                'timeZone': self.facility_timezone,
+                'language': 'en',
                 'metadata': {
                     'service_type': service_type,
-                    'hourly_rate': str(hourly_rate),  # Convert to string
-                    'duration_hours': str(duration_hours),  # Convert to string
-                    'total_cost': str(total_cost),  # Convert to string
-                    'booking_source': 'phone_system',
-                    'booking_title': booking_title,
-                    'customer_phone': customer_phone or ''
+                    'hourly_rate': str(hourly_rate),
+                    'duration_hours': str(duration_hours),
+                    'total_cost': str(total_cost),
+                    'customer_phone': customer_phone,
+                    'booking_source': 'phone_system'
                 }
             }
             
-            # Create the booking
-            print(f"📤 Sending booking request to Cal.com:")
-            print(f"   Event Type ID: {self.event_type_id}")
-            print(f"   Start Time: {start_time}")
-            print(f"   Timezone: {self.facility_timezone}")
-            print(f"   Booking Data: {booking_data}")
+            # Log the booking attempt
+            print(f"📤 Creating Cal.com booking:")
+            print(f"   Date/Time: {date_time_str}")
+            print(f"   Service: {service_type}")
+            print(f"   Customer: {customer_name or 'Phone Customer'}")
+            print(f"   Phone: {customer_phone}")
+            print(f"   Rate: ${hourly_rate}/hour x {duration_hours} hours = ${total_cost}")
             
-            response = self._make_request('POST', '/bookings', booking_data)
+            # Create the booking using direct POST
+            url = f"{self.base_url}/bookings"
+            headers = {'Content-Type': 'application/json'}
+            params = {'apiKey': self.api_token}
+            
+            response = requests.post(url, params=params, json=booking_data, headers=headers)
             
             print(f"📥 Cal.com response: {response.status_code}")
-            print(f"   Response body: {response.text}")
             
-            if response.status_code == 201:
+            if response.status_code in [200, 201]:
                 booking_result = response.json()
                 
-                # Generate a short booking ID
-                booking_id = str(booking_result.get('id', ''))[:8].upper()
+                # Extract booking ID
+                booking_id = str(booking_result.get('id', ''))
+                short_id = booking_id[:8].upper() if booking_id else 'UNKNOWN'
+                
+                print(f"✅ Booking created successfully! ID: {short_id}")
                 
                 return {
                     'success': True,
-                    'booking_id': booking_id,
+                    'booking_id': short_id,
                     'calcom_booking_id': booking_result.get('id'),
                     'booking_url': booking_result.get('url', ''),
                     'total_cost': total_cost,
                     'start_time': start_time,
-                    'end_time': end_time
+                    'customer_name': customer_name or 'Phone Customer',
+                    'customer_phone': customer_phone
                 }
             else:
                 error_msg = f"Cal.com booking failed: {response.status_code}"
-                if response.text:
-                    error_data = response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
-                    error_msg += f" - {error_data}"
+                error_details = response.text[:500]
+                print(f"❌ Booking failed: {error_msg}")
+                print(f"   Details: {error_details}")
                 
-                print(f"Booking creation error: {error_msg}")
                 return {
                     'success': False,
-                    'error': error_msg
+                    'error': error_msg,
+                    'details': error_details
                 }
                 
         except Exception as e:
