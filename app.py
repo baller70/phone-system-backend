@@ -129,21 +129,58 @@ def handle_fallback():
         print(f"Error in fallback: {e}")
         return jsonify(create_error_ncco())
 
-@app.route('/webhooks/speech', methods=['POST'])
+@app.route('/webhooks/speech', methods=['GET', 'POST'])
 def handle_speech():
     """Process speech input from caller."""
     try:
-        speech_data = request.get_json()
-        conversation_uuid = speech_data.get('conversation_uuid', '')
-        speech_text = speech_data.get('speech', {}).get('results', [{}])[0].get('text', '')
+        # Handle both GET and POST requests
+        if request.method == 'POST':
+            speech_data = request.get_json() or {}
+        else:
+            speech_data = request.args.to_dict()
         
-        if not speech_text or conversation_uuid not in call_sessions:
-            return jsonify(create_error_ncco())
+        print(f"Speech webhook called with data: {speech_data}")
+        
+        conversation_uuid = speech_data.get('conversation_uuid', '')
+        
+        # Handle both speech results formats
+        speech_text = ''
+        if 'speech' in speech_data:
+            speech_obj = speech_data.get('speech', {})
+            if isinstance(speech_obj, dict):
+                results = speech_obj.get('results', [])
+                if results and len(results) > 0:
+                    speech_text = results[0].get('text', '')
+        
+        # Also check for timeout scenario
+        timed_out = speech_data.get('timed_out', False)
+        
+        print(f"Conversation UUID: {conversation_uuid}")
+        print(f"Speech text: '{speech_text}'")
+        print(f"Timed out: {timed_out}")
+        
+        # If timeout or no speech, provide helpful message
+        if timed_out or not speech_text:
+            return jsonify(create_speech_input_ncco(
+                "I didn't catch that. Could you please repeat? Are you interested in pricing, availability, or making a booking?",
+                'retry'
+            ))
+        
+        # Initialize session if it doesn't exist
+        if conversation_uuid not in call_sessions:
+            call_sessions[conversation_uuid] = {
+                'from_number': speech_data.get('from', ''),
+                'state': 'greeting',
+                'context': {},
+                'start_time': datetime.now()
+            }
         
         session = call_sessions[conversation_uuid]
         
         # Process speech with NLU
         nlu_result = nlu.process_speech_input(speech_text, session['context'])
+        
+        print(f"NLU result: {nlu_result}")
         
         # Update session context
         session['context'].update(nlu_result.get('entities', {}))
@@ -155,6 +192,8 @@ def handle_speech():
         
     except Exception as e:
         print(f"Error processing speech: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify(create_error_ncco())
 
 def handle_intent(nlu_result, session):
@@ -267,12 +306,13 @@ def create_greeting_ncco():
         {
             "action": "input",
             "eventUrl": [f"{BASE_URL}/webhooks/speech"],
-            "timeOut": 10,
-            "maxDigits": 0,
+            "type": ["speech"],
             "speech": {
-                "endOnSilence": 2,
+                "endOnSilence": 3,
                 "language": "en-US",
-                "context": ["sports", "basketball", "booking", "rental", "party"]
+                "context": ["sports", "basketball", "booking", "rental", "party"],
+                "startTimeout": 5,
+                "maxDuration": 10
             }
         }
     ]
@@ -289,12 +329,13 @@ def create_speech_input_ncco(text, context_state):
         {
             "action": "input",
             "eventUrl": [f"{BASE_URL}/webhooks/speech"],
-            "timeOut": 10,
-            "maxDigits": 0,
+            "type": ["speech"],
             "speech": {
-                "endOnSilence": 2,
+                "endOnSilence": 3,
                 "language": "en-US",
-                "context": ["sports", "basketball", "booking", "rental", "party", "yes", "no"]
+                "context": ["sports", "basketball", "booking", "rental", "party", "yes", "no"],
+                "startTimeout": 5,
+                "maxDuration": 10
             }
         }
     ]
@@ -340,12 +381,13 @@ def create_clarification_ncco():
         {
             "action": "input",
             "eventUrl": [f"{BASE_URL}/webhooks/speech"],
-            "timeOut": 10,
-            "maxDigits": 0,
+            "type": ["speech"],
             "speech": {
-                "endOnSilence": 2,
+                "endOnSilence": 3,
                 "language": "en-US",
-                "context": ["pricing", "availability", "booking", "services", "hours"]
+                "context": ["pricing", "availability", "booking", "services", "hours"],
+                "startTimeout": 5,
+                "maxDuration": 10
             }
         }
     ]
