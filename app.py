@@ -49,14 +49,19 @@ BUSINESS_HOURS = {
 # Session storage (in production, use Redis or database)
 call_sessions = {}
 
-@app.route('/webhooks/answer', methods=['POST'])
+@app.route('/webhooks/answer', methods=['GET', 'POST'])
 def answer_call():
     """
     Handle incoming calls with Vonage Voice API.
     Returns NCCO (Nexmo Call Control Object) to control call flow.
     """
     try:
-        call_data = request.get_json()
+        # Handle both GET and POST requests from Vonage
+        if request.method == 'POST':
+            call_data = request.get_json() or {}
+        else:
+            call_data = request.args.to_dict()
+        
         conversation_uuid = call_data.get('conversation_uuid', '')
         from_number = call_data.get('from', '')
         
@@ -81,16 +86,45 @@ def answer_call():
         print(f"Error in answer_call: {e}")
         return jsonify(create_error_ncco())
 
-@app.route('/webhooks/events', methods=['POST'])
+@app.route('/webhooks/events', methods=['GET', 'POST'])
 def handle_events():
     """Handle Vonage Voice API events."""
     try:
-        event_data = request.get_json()
+        # Handle both GET and POST requests from Vonage
+        if request.method == 'POST':
+            event_data = request.get_json() or {}
+        else:
+            event_data = request.args.to_dict()
+        
         print(f"Received event: {event_data}")
         return jsonify({'status': 'ok'})
     except Exception as e:
         print(f"Error handling event: {e}")
         return jsonify({'status': 'error'})
+
+@app.route('/webhooks/fallback', methods=['GET', 'POST'])
+def handle_fallback():
+    """Handle fallback when main webhook fails."""
+    try:
+        # Handle both GET and POST requests from Vonage
+        if request.method == 'POST':
+            fallback_data = request.get_json() or {}
+        else:
+            fallback_data = request.args.to_dict()
+        
+        print(f"Fallback triggered: {fallback_data}")
+        
+        # Return a simple NCCO to handle the call gracefully
+        return jsonify([
+            {
+                "action": "talk",
+                "text": "I'm sorry, we're experiencing technical difficulties. Please call back in a few moments or visit our website to book online. Thank you!",
+                "voiceName": "Amy"
+            }
+        ])
+    except Exception as e:
+        print(f"Error in fallback: {e}")
+        return jsonify(create_error_ncco())
 
 @app.route('/webhooks/speech', methods=['POST'])
 def handle_speech():
