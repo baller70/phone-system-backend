@@ -402,13 +402,13 @@ def handle_general_info(entities, session):
     return create_speech_input_ncco(response_text, 'general_followup')
 
 def create_greeting_ncco():
-    """Create initial greeting NCCO."""
+    """Create initial greeting NCCO with sequential talk then input."""
     return [
         {
             "action": "talk",
             "text": "Hello! Thank you for calling our sports facility. I'm here to help you with court rentals, birthday parties, and availability. How can I assist you today?",
             "voiceName": "Amy",
-            "bargeIn": True
+            "bargeIn": False  # Prevent interruption to ensure full greeting plays
         },
         {
             "action": "input",
@@ -418,8 +418,8 @@ def create_greeting_ncco():
                 "endOnSilence": 3,
                 "language": "en-US",
                 "context": ["sports", "basketball", "booking", "rental", "party"],
-                "startTimeout": 10,  # Increased from 5 to 10 to allow full greeting to complete
-                "maxDuration": 15  # Increased from 10 to 15 for longer responses
+                "startTimeout": 10,
+                "maxDuration": 15
             }
         }
     ]
