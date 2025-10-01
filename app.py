@@ -418,8 +418,8 @@ def create_greeting_ncco():
                 "endOnSilence": 3,
                 "language": "en-US",
                 "context": ["sports", "basketball", "booking", "rental", "party"],
-                "startTimeout": 5,
-                "maxDuration": 10
+                "startTimeout": 10,  # Increased from 5 to 10 to allow full greeting to complete
+                "maxDuration": 15  # Increased from 10 to 15 for longer responses
             }
         }
     ]
@@ -441,8 +441,8 @@ def create_speech_input_ncco(text, context_state):
                 "endOnSilence": 3,
                 "language": "en-US",
                 "context": ["sports", "basketball", "booking", "rental", "party", "yes", "no"],
-                "startTimeout": 5,
-                "maxDuration": 10
+                "startTimeout": 10,  # Increased to allow full message to complete
+                "maxDuration": 15  # Increased for longer user responses
             }
         }
     ]
