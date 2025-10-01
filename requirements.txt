@@ -1,0 +1,12 @@
+
+flask==3.0.0
+vonage==4.7.1
+requests==2.31.0
+pandas==2.3.3
+python-dotenv==1.1.1
+pytz==2025.2
+
+# Legacy Google Calendar dependencies (optional - only needed if reverting to Google Calendar)
+# google-api-python-client==2.183.0
+# google-auth-httplib2==0.2.0
+# google-auth-oauthlib==1.2.2

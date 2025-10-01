@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: phone-system-backend
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python3 -m flask --app app run --host=0.0.0.0 --port=$PORT"
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: VONAGE_API_KEY
+        value: f24f827b
+      - key: VONAGE_API_SECRET
+        value: caN7axYnDKyPMW0MxPCZTvIDWH3fdrQgaNm18HBaNReEBSUKox
+      - key: VONAGE_APPLICATION_ID
+        value: 5f33f5f3-8898-4675-ad58-7823db96a34d
+      - key: VONAGE_PHONE_NUMBER
+        value: +19095779171
+      - key: STAFF_PHONE_NUMBER
+        value: +19177969730
+      - key: CALCOM_API_TOKEN
+        value: cal_live_2d623ed4ea05f1cc11dc278d19cf2430
+      - key: CALCOM_BASE_URL
+        value: https://api.cal.com/v1
+      - key: FACILITY_TIMEZONE
+        value: America/New_York
+      - key: BUSINESS_HOURS_START
+        value: 9
+      - key: BUSINESS_HOURS_END
+        value: 21
