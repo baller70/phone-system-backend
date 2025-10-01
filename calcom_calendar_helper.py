@@ -280,10 +280,20 @@ Booked via phone system at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
                 print(f"❌ Booking failed: {error_msg}")
                 print(f"   Details: {error_details}")
                 
+                # Try to parse error response for more specific details
+                try:
+                    error_json = response.json()
+                    error_message = error_json.get('message', '') or error_json.get('error', '')
+                    if error_message:
+                        error_details = error_message
+                except:
+                    pass
+                
                 return {
                     'success': False,
                     'error': error_msg,
-                    'details': error_details
+                    'details': error_details,
+                    'status_code': response.status_code
                 }
                 
         except Exception as e:

@@ -327,10 +327,50 @@ def handle_booking_request(entities, session):
         
         if booking_result['success']:
             response_text = f"Perfect! I've reserved {booking_details['service_type'].replace('_', ' ')} for {booking_details['date_time']} at ${booking_details['rate']} per hour. Your booking confirmation is {booking_result['booking_id']}. You'll receive a confirmation text shortly. Is there anything else I can help you with?"
+            # Clear the proposed booking
+            session['context'].pop('proposed_booking', None)
+            session['state'] = 'booking_complete'
             return create_speech_input_ncco(response_text, 'booking_complete')
         else:
-            response_text = "I'm sorry, there was an issue creating your booking. Let me transfer you to our staff for assistance."
-            return escalation_handler.create_escalation_ncco('booking_error', entities)
+            # Check if it's a double booking error
+            error_details = booking_result.get('details', '').lower()
+            is_double_booking = any(keyword in error_details for keyword in 
+                ['already booked', 'not available', 'conflict', 'occupied', 'unavailable'])
+            
+            if is_double_booking:
+                # Slot was taken between availability check and booking creation
+                response_text = f"I apologize, but that time slot for {booking_details['date_time']} is no longer available. It was just booked by someone else. "
+                
+                # Get alternative times
+                try:
+                    requested_datetime = datetime.strptime(booking_details['date_time'], '%Y-%m-%d %H:%M')
+                    alternatives = calendar_helper._get_alternative_times(
+                        requested_datetime, 
+                        booking_details.get('duration', 1),
+                        3,
+                        booking_details['service_type']
+                    )
+                    
+                    if alternatives:
+                        response_text += f"I have availability on {alternatives[0]}. Would that work for you?"
+                        # Clear the old proposed booking
+                        session['context'].pop('proposed_booking', None)
+                        session['state'] = 'booking_alternative'
+                        return create_speech_input_ncco(response_text, 'booking_alternative')
+                    else:
+                        response_text += "Would you like to try a different date or time?"
+                        session['context'].pop('proposed_booking', None)
+                        session['state'] = 'booking_retry'
+                        return create_speech_input_ncco(response_text, 'booking_retry')
+                except:
+                    response_text += "Would you like to try a different date or time?"
+                    session['context'].pop('proposed_booking', None)
+                    session['state'] = 'booking_retry'
+                    return create_speech_input_ncco(response_text, 'booking_retry')
+            else:
+                # Some other error - transfer to staff
+                response_text = "I'm sorry, there was a technical issue creating your booking. Let me transfer you to our staff who can help you complete this booking."
+                return escalation_handler.create_escalation_ncco('booking_error', entities)
     
     # Check if we have both service type and date/time
     if service_type and date_time:
@@ -424,14 +464,24 @@ def create_greeting_ncco():
         }
     ]
 
-def create_speech_input_ncco(text, context_state):
+def create_speech_input_ncco(text, context_state, allow_barge_in=True):
     """Create NCCO for speech input with custom text."""
+    # For confirmation messages, disable barge-in to ensure full message is heard
+    barge_in = allow_barge_in and context_state not in ['booking_confirmation', 'booking_complete']
+    
+    # Calculate approximate speech duration (assuming ~150 words per minute)
+    word_count = len(text.split())
+    speech_duration_seconds = (word_count / 150) * 60
+    
+    # Set timeout based on message length
+    start_timeout = max(10, int(speech_duration_seconds) + 3)
+    
     return [
         {
             "action": "talk",
             "text": text,
             "voiceName": "Amy",
-            "bargeIn": True
+            "bargeIn": barge_in
         },
         {
             "action": "input",
@@ -441,8 +491,8 @@ def create_speech_input_ncco(text, context_state):
                 "endOnSilence": 3,
                 "language": "en-US",
                 "context": ["sports", "basketball", "booking", "rental", "party", "yes", "no"],
-                "startTimeout": 10,  # Increased to allow full message to complete
-                "maxDuration": 15  # Increased for longer user responses
+                "startTimeout": start_timeout,
+                "maxDuration": 15
             }
         }
     ]
