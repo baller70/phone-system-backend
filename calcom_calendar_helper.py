@@ -239,7 +239,16 @@ Booking Details:
             }
             
             # Create the booking
+            print(f"📤 Sending booking request to Cal.com:")
+            print(f"   Event Type ID: {self.event_type_id}")
+            print(f"   Start Time: {start_time}")
+            print(f"   Timezone: {self.facility_timezone}")
+            print(f"   Booking Data: {booking_data}")
+            
             response = self._make_request('POST', '/bookings', booking_data)
+            
+            print(f"📥 Cal.com response: {response.status_code}")
+            print(f"   Response body: {response.text}")
             
             if response.status_code == 201:
                 booking_result = response.json()
