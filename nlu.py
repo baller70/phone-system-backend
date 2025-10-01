@@ -200,20 +200,21 @@ class SportsRentalNLU:
                 time_info['time_reference'] = time_ref
                 break
         
-        # Extract specific dates (e.g., "October 2nd", "Oct 2", "10/2")
+        # Extract specific dates (e.g., "October 2nd", "Oct 2", "October the 2nd", "10/2")
+        # Pattern handles optional "the" and ordinal suffixes (1st, 2nd, 3rd, etc.)
         date_patterns = [
-            r'(january|jan)\s+(\d{1,2})',
-            r'(february|feb)\s+(\d{1,2})',
-            r'(march|mar)\s+(\d{1,2})',
-            r'(april|apr)\s+(\d{1,2})',
-            r'(may)\s+(\d{1,2})',
-            r'(june|jun)\s+(\d{1,2})',
-            r'(july|jul)\s+(\d{1,2})',
-            r'(august|aug)\s+(\d{1,2})',
-            r'(september|sept|sep)\s+(\d{1,2})',
-            r'(october|oct)\s+(\d{1,2})',
-            r'(november|nov)\s+(\d{1,2})',
-            r'(december|dec)\s+(\d{1,2})'
+            r'(january|jan)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?',
+            r'(february|feb)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?',
+            r'(march|mar)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?',
+            r'(april|apr)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?',
+            r'(may)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?',
+            r'(june|jun)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?',
+            r'(july|jul)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?',
+            r'(august|aug)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?',
+            r'(september|sept|sep)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?',
+            r'(october|oct)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?',
+            r'(november|nov)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?',
+            r'(december|dec)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?'
         ]
         
         month_map = {
