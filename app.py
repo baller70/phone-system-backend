@@ -69,17 +69,20 @@ CORS(app,
          "allow_headers": ["Content-Type", "Authorization", "X-API-Key"],
          "expose_headers": ["Content-Type", "Authorization"],
          "supports_credentials": False,  # Can't use credentials with wildcard origin
-         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+         "send_wildcard": True,
+         "always_send": True
      }})
 
-# Add CORS headers to all responses
+# Add CORS headers to all responses including OPTIONS
 @app.after_request
 def after_request(response):
     origin = request.headers.get('Origin')
-    if origin:
-        response.headers['Access-Control-Allow-Origin'] = origin
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-API-Key'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    # Always allow the requesting origin
+    response.headers['Access-Control-Allow-Origin'] = origin if origin else '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-API-Key'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Max-Age'] = '3600'
     return response
 
 # Get base URL for webhooks (use environment variable or default to request)
