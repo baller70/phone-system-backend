@@ -58,3 +58,10 @@ joblib==1.3.2                  # Model serialization
 cryptography==41.0.7           # Encryption
 pyjwt==2.8.0                   # JWT tokens
 bcrypt==4.1.2                  # Password hashing
+
+# ============================================
+# PHASE 9: Intelligence & Customer Experience
+# ============================================
+azure-cognitiveservices-speech==1.34.0  # Azure Speech-to-Text
+resend==0.7.0                           # Email service (Resend API)
+pyjwt==2.8.0                            # JWT tokens (if not already installed)

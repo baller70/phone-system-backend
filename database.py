@@ -254,8 +254,11 @@ class DatabaseManager:
             except Exception as e:
                 logger.error(f"Migration failed: {str(e)}")
         
+        # Run Phase 9 migrations
+        _add_phase9_tables_sqlite(cursor)
+        
         self._connection.commit()
-        logger.info("SQLite migrations completed")
+        logger.info("SQLite migrations completed (including Phase 9)")
     
     def _run_postgres_migrations(self):
         """Run PostgreSQL migrations from schema file"""
@@ -294,6 +297,17 @@ class DatabaseManager:
                 cursor = self._connection.cursor()
                 cursor.execute(schema)
                 logger.info("PostgreSQL Phase 8 migrations completed")
+            
+            # Run Phase 9 migrations
+            schema_path_9 = os.path.join(os.path.dirname(__file__), 'migrations', 'phase9_schema.sql')
+            
+            if os.path.exists(schema_path_9):
+                with open(schema_path_9, 'r') as f:
+                    schema = f.read()
+                
+                cursor = self._connection.cursor()
+                cursor.execute(schema)
+                logger.info("PostgreSQL Phase 9 migrations completed")
                 
         except Exception as e:
             logger.error(f"PostgreSQL migration failed: {str(e)}")
@@ -369,3 +383,146 @@ class DatabaseManager:
 
 # Global database instance
 db = DatabaseManager()
+
+# Add Phase 9 migration support to SQLite migrations
+def _add_phase9_tables_sqlite(cursor):
+    """Add Phase 9 tables for SQLite"""
+    
+    phase9_migrations = [
+        # Call Recordings
+        """
+        CREATE TABLE IF NOT EXISTS call_recordings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            call_uuid TEXT UNIQUE NOT NULL,
+            file_path TEXT NOT NULL,
+            recording_url TEXT,
+            file_size INTEGER DEFAULT 0,
+            duration_seconds INTEGER DEFAULT 0,
+            format TEXT DEFAULT 'mp3',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        
+        # Call Transcriptions
+        """
+        CREATE TABLE IF NOT EXISTS call_transcriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            call_uuid TEXT UNIQUE NOT NULL,
+            transcription_text TEXT NOT NULL,
+            word_count INTEGER DEFAULT 0,
+            char_count INTEGER DEFAULT 0,
+            language TEXT DEFAULT 'en-US',
+            confidence_score REAL DEFAULT 0,
+            audio_file_path TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        
+        # Call Intelligence
+        """
+        CREATE TABLE IF NOT EXISTS call_intelligence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            call_uuid TEXT UNIQUE NOT NULL,
+            call_score INTEGER DEFAULT 0,
+            success_indicators TEXT,
+            problem_indicators TEXT,
+            upsell_opportunities TEXT,
+            key_phrases TEXT,
+            insights TEXT,
+            sentiment_overall TEXT DEFAULT 'neutral',
+            sentiment_score REAL DEFAULT 0,
+            escalation_recommended INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        
+        # Notifications Log
+        """
+        CREATE TABLE IF NOT EXISTS notifications_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            booking_id TEXT,
+            customer_phone TEXT,
+            customer_email TEXT,
+            notification_type TEXT NOT NULL,
+            channel TEXT,
+            status TEXT DEFAULT 'pending',
+            error_message TEXT,
+            sent_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        
+        # Scheduled Notifications
+        """
+        CREATE TABLE IF NOT EXISTS scheduled_notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            booking_id TEXT NOT NULL,
+            notification_type TEXT NOT NULL,
+            scheduled_time TEXT NOT NULL,
+            booking_data TEXT,
+            status TEXT DEFAULT 'pending',
+            sent_at TEXT,
+            error_message TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        
+        # Customer Portal Users
+        """
+        CREATE TABLE IF NOT EXISTS customer_portal_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            name TEXT,
+            verification_token TEXT,
+            is_verified INTEGER DEFAULT 0,
+            reset_token TEXT,
+            reset_token_expires TEXT,
+            last_login TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        
+        # Customer Booking History
+        """
+        CREATE TABLE IF NOT EXISTS customer_booking_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_phone TEXT NOT NULL,
+            booking_id TEXT NOT NULL,
+            facility_type TEXT NOT NULL,
+            booking_date TEXT NOT NULL,
+            booking_time TEXT NOT NULL,
+            duration_hours REAL NOT NULL,
+            price REAL,
+            status TEXT DEFAULT 'confirmed',
+            created_via TEXT DEFAULT 'phone',
+            can_cancel INTEGER DEFAULT 1,
+            can_reschedule INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        
+        # Notification Templates
+        """
+        CREATE TABLE IF NOT EXISTS notification_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            template_name TEXT UNIQUE NOT NULL,
+            template_type TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            html_content TEXT NOT NULL,
+            variables TEXT,
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    ]
+    
+    for migration in phase9_migrations:
+        try:
+            cursor.execute(migration)
+        except Exception as e:
+            logger.error(f"Phase 9 SQLite migration failed: {str(e)}")
+
