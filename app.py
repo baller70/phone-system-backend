@@ -156,7 +156,9 @@ def handle_events():
 
 @app.route('/webhooks/dtmf', methods=['GET', 'POST'])
 def handle_dtmf():
-    """Handle DTMF (keypad) input from IVR menu."""
+    """Handle DTMF (keypad) input from IVR menu - using dashboard settings."""
+    from ivr_config import get_menu_option_by_key
+    
     try:
         # Handle both GET and POST requests
         if request.method == 'POST':
@@ -187,25 +189,78 @@ def handle_dtmf():
         if timed_out or not dtmf:
             return jsonify(create_ivr_menu_ncco(replay=True))
         
-        # Route based on DTMF input
-        if dtmf in IVR_MENU:
-            menu_option = IVR_MENU[dtmf]
-            session['department'] = menu_option['department']
+        # Get menu option from dashboard settings
+        menu_option = get_menu_option_by_key(dtmf)
+        
+        if menu_option:
+            # Store menu option info in session
+            session['selected_option'] = menu_option.get('optionName', '')
+            session['intent_type'] = menu_option.get('intentType', 'general_inquiry')
             
-            # Special handling for operator
-            if dtmf == '0':
+            # Special handling for operator/transfer
+            action_type = menu_option.get('actionType', 'ai_conversation')
+            if action_type == 'transfer' or dtmf == '0':
                 return jsonify(create_transfer_ncco())
             
-            # Set context based on department
-            if menu_option['department'] == 'basketball':
-                session['context']['service_type'] = 'basketball'
-            elif menu_option['department'] == 'parties':
-                session['context']['service_type'] = 'birthday_party'
-            elif menu_option['department'] == 'multisport':
-                session['context']['service_type'] = 'multi_sport'
+            # Set AI context from dashboard settings
+            ai_context = menu_option.get('aiContext', '')
+            if ai_context:
+                session['context']['ai_context'] = ai_context
             
-            # Return department-specific greeting
-            return jsonify(create_department_greeting_ncco(menu_option))
+            # Set service type based on intent
+            intent_type = menu_option.get('intentType', '')
+            if intent_type:
+                session['context']['service_type'] = intent_type
+            
+            # Create department greeting using dashboard settings
+            department_greeting = menu_option.get('departmentGreeting', 'How can I help you today?')
+            
+            # Check if option has custom audio
+            if menu_option.get('useAudio') and menu_option.get('audioUrl'):
+                # Use audio greeting
+                ncco = [
+                    {
+                        "action": "stream",
+                        "streamUrl": [menu_option.get('audioUrl')],
+                        "bargeIn": True
+                    },
+                    {
+                        "action": "input",
+                        "eventUrl": [f"{BASE_URL}/webhooks/speech"],
+                        "type": ["speech"],
+                        "speech": {
+                            "endOnSilence": 3,
+                            "language": "en-US",
+                            "context": ["sports", "basketball", "booking", "rental", "party", "price", "availability"],
+                            "startTimeout": 10,
+                            "maxDuration": 15
+                        }
+                    }
+                ]
+            else:
+                # Use text-to-speech
+                ncco = [
+                    {
+                        "action": "talk",
+                        "text": department_greeting,
+                        "voiceName": "Amy",
+                        "bargeIn": True
+                    },
+                    {
+                        "action": "input",
+                        "eventUrl": [f"{BASE_URL}/webhooks/speech"],
+                        "type": ["speech"],
+                        "speech": {
+                            "endOnSilence": 3,
+                            "language": "en-US",
+                            "context": ["sports", "basketball", "booking", "rental", "party", "price", "availability"],
+                            "startTimeout": 10,
+                            "maxDuration": 15
+                        }
+                    }
+                ]
+            
+            return jsonify(ncco)
         else:
             # Invalid input - replay menu
             return jsonify(create_ivr_menu_ncco(invalid=True))
@@ -508,46 +563,69 @@ def create_greeting_ncco():
     return create_ivr_menu_ncco()
 
 def create_ivr_menu_ncco(replay=False, invalid=False):
-    """Create IVR menu NCCO with DTMF input options."""
+    """Create IVR menu NCCO with DTMF input options - using dashboard settings."""
+    from ivr_config import get_ivr_settings, build_menu_text
+    
+    # Get settings from dashboard
+    settings = get_ivr_settings()
+    
     # Build the greeting text
     if invalid:
-        greeting_text = "I'm sorry, that's not a valid option. "
+        greeting_text = settings.get('invalidOptionMessage', "I'm sorry, that's not a valid option.") + " "
     elif replay:
-        greeting_text = "I didn't catch that. "
+        greeting_text = settings.get('replayMessage', "I didn't catch that.") + " "
     else:
-        greeting_text = "Thank you for calling Premier Sports Facility! "
+        greeting_text = settings.get('greetingText', 'Thank you for calling Premier Sports Facility!') + " "
     
-    # Add menu options
-    menu_text = (
-        "Please listen carefully to the following options. "
-        "Press 1 for basketball court rentals. "
-        "Press 2 for birthday party packages. "
-        "Press 3 for multi-sport activities like volleyball or dodgeball. "
-        "Press 4 for corporate events and leagues. "
-        "Press 9 to speak with our AI assistant. "
-        "Or press 0 to speak with a representative."
-    )
+    # Build menu text from active options
+    menu_text = build_menu_text(settings)
     
     full_text = greeting_text + menu_text
     
-    return [
-        {
-            "action": "talk",
-            "text": full_text,
-            "voiceName": "Amy",
-            "bargeIn": True
-        },
-        {
-            "action": "input",
-            "eventUrl": [f"{BASE_URL}/webhooks/dtmf"],
-            "type": ["dtmf"],
-            "dtmf": {
-                "timeOut": 10,
-                "maxDigits": 1,
-                "submitOnHash": False
+    # Get voice and timeout settings
+    voice_name = settings.get('voiceName', 'Amy')
+    timeout = settings.get('timeoutSeconds', 10)
+    
+    # Check if using audio greeting (only for initial greeting, not replays/errors)
+    if not replay and not invalid and settings.get('useAudioGreeting') and settings.get('greetingAudioUrl'):
+        # Use audio file for greeting
+        return [
+            {
+                "action": "stream",
+                "streamUrl": [settings.get('greetingAudioUrl')],
+                "bargeIn": True
+            },
+            {
+                "action": "input",
+                "eventUrl": [f"{BASE_URL}/webhooks/dtmf"],
+                "type": ["dtmf"],
+                "dtmf": {
+                    "timeOut": timeout,
+                    "maxDigits": 1,
+                    "submitOnHash": False
+                }
             }
-        }
-    ]
+        ]
+    else:
+        # Use text-to-speech
+        return [
+            {
+                "action": "talk",
+                "text": full_text,
+                "voiceName": voice_name,
+                "bargeIn": True
+            },
+            {
+                "action": "input",
+                "eventUrl": [f"{BASE_URL}/webhooks/dtmf"],
+                "type": ["dtmf"],
+                "dtmf": {
+                    "timeOut": timeout,
+                    "maxDigits": 1,
+                    "submitOnHash": False
+                }
+            }
+        ]
 
 def create_department_greeting_ncco(menu_option):
     """Create department-specific greeting after menu selection."""
