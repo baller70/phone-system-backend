@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Dashboard URL from environment
-DASHBOARD_URL = os.environ.get('DASHBOARD_URL', 'https://thosphonesystem.abacusai.app')
+DASHBOARD_URL = os.environ.get('DASHBOARD_URL', 'https://phone-system-dashboa-8em0c9.abacusai.app')
 
 # Cache for IVR settings (optional, to reduce API calls)
 _ivr_cache = {
