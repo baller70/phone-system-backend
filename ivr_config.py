@@ -35,11 +35,17 @@ def fetch_ivr_settings() -> Optional[Dict]:
             logger.info("Using cached IVR settings")
             return _ivr_cache['settings']
         
-        # Fetch from API
-        url = f"{DASHBOARD_URL}/api/ivr-settings"
+        # Fetch from API (using public endpoint)
+        url = f"{DASHBOARD_URL}/api/public/ivr-settings"
         logger.info(f"Fetching IVR settings from {url}")
         
-        response = requests.get(url, timeout=5)
+        # Add API key header if available (optional for security)
+        headers = {}
+        api_key = os.environ.get('BACKEND_API_KEY')
+        if api_key:
+            headers['x-api-key'] = api_key
+        
+        response = requests.get(url, headers=headers, timeout=5)
         
         if response.status_code == 200:
             settings = response.json()
