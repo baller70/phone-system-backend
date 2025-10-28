@@ -92,26 +92,38 @@ def get_recent_calls(limit: int = 10):
         return []
 
 def test_dashboard_connection():
-    """Test the dashboard API connection."""
+    """Test the dashboard API connection by creating a test call log."""
     try:
         print(f"Testing dashboard API connection...")
         print(f"Dashboard URL: {DASHBOARD_API_URL}")
         
-        url = f"{DASHBOARD_API_URL}/api/call-logs?limit=1"
-        headers = {"X-API-Key": DASHBOARD_API_KEY}
+        # Test by creating a minimal test log entry
+        url = f"{DASHBOARD_API_URL}/api/call-logs"
+        headers = {
+            "Content-Type": "application/json",
+            "X-API-Key": DASHBOARD_API_KEY
+        }
         
-        response = requests.get(url, headers=headers, timeout=10)
+        test_payload = {
+            "callerId": "+15555555555",
+            "callerName": "API Connection Test",
+            "duration": 1,
+            "intent": "connection_test",
+            "outcome": "test",
+            "notes": "Automated connection test",
+            "cost": 0.0001
+        }
         
-        if response.status_code == 200:
-            data = response.json()
-            call_count = len(data.get('calls', []))
-            print(f"✓ Dashboard API connection successful! Can access call logs.")
+        response = requests.post(url, json=test_payload, headers=headers, timeout=10)
+        
+        if response.status_code in [200, 201]:
+            print(f"✓ Dashboard API connection successful! Test call log created.")
             return True
         elif response.status_code == 401:
             print(f"✗ Dashboard API connection failed: Unauthorized (check API key)")
             return False
         else:
-            print(f"✗ Dashboard API connection failed: HTTP {response.status_code}")
+            print(f"✗ Dashboard API connection failed: HTTP {response.status_code} - {response.text}")
             return False
     except Exception as e:
         print(f"✗ Dashboard API connection failed: {type(e).__name__}: {e}")

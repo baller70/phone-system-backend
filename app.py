@@ -146,20 +146,12 @@ def test_database():
     """Test endpoint to verify dashboard API connection."""
     try:
         if database.test_dashboard_connection():
-            recent_calls = database.get_recent_calls(limit=3)
             return jsonify({
                 'status': 'success',
-                'message': 'Dashboard API connection working!',
+                'message': 'Dashboard API connection working! Call logging is ready.',
                 'dashboard_url': database.DASHBOARD_API_URL,
-                'recent_calls_count': len(recent_calls),
-                'sample_calls': [
-                    {
-                        'callerId': call.get('callerId'),
-                        'intent': call.get('intent'),
-                        'outcome': call.get('outcome')
-                    }
-                    for call in recent_calls[:3]
-                ]
+                'note': 'A test call log was created to verify the connection',
+                'next_step': 'Make a call to your Vonage number to see it logged in the dashboard'
             })
         else:
             return jsonify({
