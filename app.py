@@ -596,6 +596,11 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
     voice_name = settings.get('voiceName', 'Amy')
     timeout = settings.get('timeoutSeconds', 10)
     
+    # CRITICAL FIX: Disable bargeIn to prevent losing DTMF key presses
+    # With bargeIn=True, pressing a key interrupts the talk but the key press is LOST
+    # With bargeIn=False, users must wait for greeting to finish, then press a key
+    # This is more reliable and ensures DTMF is properly captured
+    
     # Check if using audio greeting (only for initial greeting, not replays/errors)
     if not replay and not invalid and settings.get('useAudioGreeting') and settings.get('greetingAudioUrl'):
         # Use audio file for greeting
@@ -603,7 +608,7 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
             {
                 "action": "stream",
                 "streamUrl": [settings.get('greetingAudioUrl')],
-                "bargeIn": True
+                "bargeIn": False
             },
             {
                 "action": "input",
@@ -617,13 +622,15 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
             }
         ]
     else:
-        # Use text-to-speech
+        # Use text-to-speech WITHOUT bargeIn
+        # User must wait for greeting to complete before pressing a key
+        # This ensures DTMF input is reliably captured
         return [
             {
                 "action": "talk",
                 "text": full_text,
                 "voiceName": voice_name,
-                "bargeIn": True
+                "bargeIn": False
             },
             {
                 "action": "input",
