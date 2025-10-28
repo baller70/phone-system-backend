@@ -147,14 +147,15 @@ def test_database():
     import traceback
     
     try:
-        # Check if DATABASE_URL is set
-        db_url = os.getenv('DATABASE_URL')
+        # Use the same DATABASE_URL that database.py uses
+        db_url = database.DATABASE_URL
+        env_var_set = bool(os.getenv('DATABASE_URL'))
+        
         if not db_url:
             return jsonify({
                 'status': 'error',
-                'message': 'DATABASE_URL environment variable not set',
-                'solution': 'Add DATABASE_URL to Render environment variables',
-                'has_default': 'Yes - using hardcoded default'
+                'message': 'DATABASE_URL is None',
+                'env_var_set': env_var_set
             }), 500
         
         # Show partial connection string for debugging (hide password)
@@ -174,7 +175,8 @@ def test_database():
                 'message': 'Database connection working!',
                 'database_host': db_info,
                 'call_count': count,
-                'psycopg2_installed': True
+                'env_var_set': env_var_set,
+                'using_default': not env_var_set
             })
         except Exception as db_error:
             return jsonify({
@@ -183,7 +185,8 @@ def test_database():
                 'error_type': type(db_error).__name__,
                 'database_host': db_info,
                 'traceback': traceback.format_exc(),
-                'psycopg2_installed': True
+                'env_var_set': env_var_set,
+                'using_default': not env_var_set
             }), 500
             
     except Exception as e:
