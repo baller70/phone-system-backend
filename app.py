@@ -14,6 +14,8 @@ from nlu import SportsRentalNLU
 from calcom_calendar_helper import CalcomCalendarHelper
 from pricing import PricingEngine
 from escalation import EscalationHandler
+from knowledge_base import KnowledgeBase
+import ivr_config
 
 # Load environment variables
 load_dotenv()
@@ -28,6 +30,7 @@ nlu = SportsRentalNLU()
 calendar_helper = CalcomCalendarHelper()
 pricing_engine = PricingEngine()
 escalation_handler = EscalationHandler()
+knowledge_base = KnowledgeBase()
 
 # Initialize Vonage client
 try:
@@ -266,35 +269,55 @@ def handle_dtmf():
         last_dtmf_debug['dtmf_value'] = dtmf
         last_dtmf_debug['dtmf_type'] = str(type(dtmf))
         
-        # HARDCODED MENU OPTIONS FOR TESTING
-        # This eliminates the dashboard API as a potential issue
-        STATIC_MENU = {
-            '1': {
-                'name': 'Basketball',
-                'greeting': 'Great! I can help you book a basketball court. What date and time would you like?',
-                'intent': 'basketball_rental'
-            },
-            '2': {
-                'name': 'Parties',
-                'greeting': 'Perfect! Let me help you plan a birthday party. How many guests are you expecting?',
-                'intent': 'party_booking'
-            },
-            '9': {
-                'name': 'AI Assistant',
-                'greeting': "Hi! I'm your AI assistant. How can I help you today?",
-                'intent': 'general_inquiry'
-            },
-            '0': {
-                'name': 'Operator',
-                'greeting': None,  # Will transfer
-                'intent': 'transfer'
+        # Fetch menu options from dashboard (with fallback to static menu)
+        dashboard_settings = ivr_config.fetch_ivr_settings()
+        
+        if dashboard_settings and 'menuOptions' in dashboard_settings:
+            # Use dashboard settings
+            MENU = {}
+            for option in dashboard_settings['menuOptions']:
+                MENU[option['keyPress']] = {
+                    'name': option['optionName'],
+                    'greeting': option['departmentGreeting'],
+                    'intent': option['intentType'],
+                    'action_type': option.get('actionType', 'ai_conversation'),
+                    'transfer_number': option.get('transferNumber')
+                }
+            print(f"✓ Using menu options from dashboard: {list(MENU.keys())}")
+        else:
+            # Fallback to static menu if dashboard fetch fails
+            print("⚠ Dashboard fetch failed, using fallback static menu")
+            MENU = {
+                '1': {
+                    'name': 'Basketball',
+                    'greeting': 'Great! I can help you book a basketball court. What date and time would you like?',
+                    'intent': 'basketball_rental',
+                    'action_type': 'ai_conversation'
+                },
+                '2': {
+                    'name': 'Parties',
+                    'greeting': 'Perfect! Let me help you plan a birthday party. How many guests are you expecting?',
+                    'intent': 'party_booking',
+                    'action_type': 'ai_conversation'
+                },
+                '9': {
+                    'name': 'AI Assistant',
+                    'greeting': "Hi! I'm your AI assistant. How can I help you today?",
+                    'intent': 'general_inquiry',
+                    'action_type': 'ai_conversation'
+                },
+                '0': {
+                    'name': 'Operator',
+                    'greeting': None,  # Will transfer
+                    'intent': 'transfer',
+                    'action_type': 'transfer'
+                }
             }
-        }
         
-        print(f"Checking DTMF '{dtmf}' against static menu: {list(STATIC_MENU.keys())}")
+        print(f"Checking DTMF '{dtmf}' against menu: {list(MENU.keys())}")
         
-        if dtmf in STATIC_MENU:
-            option = STATIC_MENU[dtmf]
+        if dtmf in MENU:
+            option = MENU[dtmf]
             print(f"✓ MATCHED! Option: {option['name']}")
             
             # Update debug storage
@@ -343,12 +366,12 @@ def handle_dtmf():
             return jsonify(ncco)
         else:
             # Invalid input - replay menu
-            print(f"✗ NO MATCH for DTMF '{dtmf}'. Valid options: {list(STATIC_MENU.keys())}")
+            print(f"✗ NO MATCH for DTMF '{dtmf}'. Valid options: {list(MENU.keys())}")
             
             # Update debug storage
             last_dtmf_debug['matched'] = False
             last_dtmf_debug['matched_option'] = None
-            last_dtmf_debug['valid_options'] = list(STATIC_MENU.keys())
+            last_dtmf_debug['valid_options'] = list(MENU.keys())
             
             print(f"===============================\n")
             return jsonify(create_ivr_menu_ncco(invalid=True))
@@ -431,6 +454,9 @@ def handle_speech():
             }
         
         session = call_sessions[conversation_uuid]
+        
+        # Store the speech text for knowledge base queries
+        session['last_speech'] = speech_text
         
         # Process speech with NLU
         nlu_result = nlu.process_speech_input(speech_text, session['context'])
@@ -634,17 +660,33 @@ def handle_booking_request(entities, session):
         return create_speech_input_ncco(response_text, 'booking_details_needed')
 
 def handle_general_info(entities, session):
-    """Handle general information requests."""
-    info_type = entities.get('info_type', 'general')
+    """Handle general information requests using knowledge base."""
     
-    if info_type == 'hours':
-        response_text = "We're open daily from 9 AM to 9 PM. Our facility offers basketball courts, multi-sport activities, and birthday party packages."
-    elif info_type == 'services':
-        response_text = "We offer basketball court rentals, multi-sport activities like dodgeball and volleyball, and complete birthday party packages with dedicated hosts."
-    else:
-        response_text = "Welcome to our sports facility! We offer basketball court rentals, multi-sport activities, and birthday parties from 9 AM to 9 PM daily. How can I help you today?"
+    # Get the last thing the user said from session
+    user_question = session.get('last_speech', '')
     
-    response_text += " Would you like to hear about pricing or check availability?"
+    # If we don't have the question, use entities to construct one
+    if not user_question:
+        info_type = entities.get('info_type', 'general')
+        if info_type == 'hours':
+            user_question = "What are your hours?"
+        elif info_type == 'services':
+            user_question = "What services do you offer?"
+        else:
+            user_question = "Tell me about your facility"
+    
+    # Query knowledge base
+    kb_response = knowledge_base.query_knowledge(user_question, session.get('context', {}))
+    
+    response_text = kb_response['answer']
+    
+    # Add source attribution if available
+    if kb_response.get('source'):
+        print(f"[KB] Response from {kb_response['source']}")
+    
+    # Add follow-up prompt
+    response_text += " Is there anything else you'd like to know?"
+    
     return create_speech_input_ncco(response_text, 'general_followup')
 
 def create_greeting_ncco():
@@ -652,20 +694,39 @@ def create_greeting_ncco():
     return create_ivr_menu_ncco()
 
 def create_ivr_menu_ncco(replay=False, invalid=False):
-    """Create IVR menu NCCO with DTMF input options - SIMPLIFIED FOR TESTING."""
+    """Create IVR menu NCCO with DTMF input options - pulls from dashboard."""
     
-    # SIMPLIFIED GREETING - no dashboard fetch for now to isolate the issue
-    # This will help us determine if the problem is with the DTMF capture or the settings
+    # Fetch IVR settings from dashboard
+    dashboard_settings = ivr_config.fetch_ivr_settings()
+    
+    if dashboard_settings:
+        # Use dashboard settings
+        base_greeting = dashboard_settings.get('greetingText', 'Welcome to Premier Sports.')
+        invalid_msg = dashboard_settings.get('invalidOptionMessage', "Sorry, invalid option.")
+        replay_msg = dashboard_settings.get('replayMessage', "I didn't catch that.")
+        menu_options = dashboard_settings.get('menuOptions', [])
+        
+        # Build menu text from options
+        menu_parts = []
+        for option in menu_options:
+            menu_parts.append(option.get('optionText', ''))
+        menu_text = ' '.join(menu_parts)
+        
+        print(f"✓ Using IVR settings from dashboard")
+    else:
+        # Fallback to static settings
+        print(f"⚠ Using fallback IVR settings")
+        base_greeting = "Welcome to Premier Sports."
+        invalid_msg = "Sorry, invalid option."
+        replay_msg = "I didn't catch that."
+        menu_text = "Press 1 for basketball, press 2 for parties, press 9 for the AI assistant, or press 0 for an operator."
     
     if invalid:
-        greeting_text = "Sorry, invalid option. "
+        greeting_text = invalid_msg + " "
     elif replay:
-        greeting_text = "I didn't catch that. "
+        greeting_text = replay_msg + " "
     else:
-        greeting_text = "Welcome to Premier Sports. "
-    
-    # SIMPLE STATIC MENU
-    menu_text = "Press 1 for basketball, press 2 for parties, press 9 for the AI assistant, or press 0 for an operator."
+        greeting_text = base_greeting + " "
     
     full_text = greeting_text + menu_text
     
