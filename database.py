@@ -1,528 +1,128 @@
 
 """
-Database Connection Manager
-Supports both SQLite (development) and PostgreSQL (production)
+Database helper for logging calls to the dashboard database.
 """
 
 import os
-import sqlite3
-import logging
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from datetime import datetime
 from contextlib import contextmanager
 
-logger = logging.getLogger(__name__)
+# Database connection string - fetched from dashboard
+DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://role_151b3281cd:1OhWAdgclIqVA92DmfBBy95WxugHLZnk@db-151b3281cd.db002.hosteddb.reai.io:5432/151b3281cd?connect_timeout=15')
 
+@contextmanager
+def get_db_connection():
+    """Create a database connection context manager."""
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        yield conn
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        print(f"Database error: {e}")
+        raise
+    finally:
+        if conn:
+            conn.close()
 
-class DatabaseManager:
-    """Manages database connections and queries"""
+def log_call_to_dashboard(
+    caller_id: str,
+    caller_name: str = None,
+    duration: int = 0,
+    intent: str = "unknown",
+    outcome: str = "completed",
+    recording_url: str = None,
+    transcription: str = None,
+    notes: str = None,
+    cost: float = 0.0
+):
+    """
+    Log a call to the dashboard database.
     
-    def __init__(self):
-        self.db_type = os.getenv('DATABASE_TYPE', 'sqlite')  # 'sqlite' or 'postgres'
-        self.db_path = os.getenv('DATABASE_PATH', './data/phone_system.db')
-        self.postgres_url = os.getenv('DATABASE_URL')
-        self._connection = None
-        
-        if self.db_type == 'sqlite':
-            self._init_sqlite()
-        else:
-            self._init_postgres()
+    Args:
+        caller_id: Phone number of the caller
+        caller_name: Name of the caller (optional)
+        duration: Call duration in seconds
+        intent: The intent/purpose of the call (booking, pricing, info, etc.)
+        outcome: Call outcome (completed, failed, transferred, etc.)
+        recording_url: URL to the call recording (optional)
+        transcription: Full call transcription (optional)
+        notes: Additional notes about the call (optional)
+        cost: Estimated call cost in dollars
     
-    def _init_sqlite(self):
-        """Initialize SQLite database"""
-        try:
-            # Create data directory if it doesn't exist
-            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-            
-            # Create connection
-            self._connection = sqlite3.connect(self.db_path, check_same_thread=False)
-            self._connection.row_factory = sqlite3.Row
-            logger.info(f"SQLite database initialized: {self.db_path}")
-            
-            # Run migrations
-            self._run_sqlite_migrations()
-            
-        except Exception as e:
-            logger.error(f"SQLite initialization failed: {str(e)}")
-            raise
-    
-    def _init_postgres(self):
-        """Initialize PostgreSQL database"""
-        try:
-            import psycopg2
-            from psycopg2.extras import RealDictCursor
-            
-            self._connection = psycopg2.connect(
-                self.postgres_url,
-                cursor_factory=RealDictCursor
-            )
-            self._connection.autocommit = True
-            logger.info("PostgreSQL database initialized")
-            
-            # Run migrations
-            self._run_postgres_migrations()
-            
-        except Exception as e:
-            logger.error(f"PostgreSQL initialization failed: {str(e)}")
-            # Fallback to SQLite
-            logger.warning("Falling back to SQLite")
-            self.db_type = 'sqlite'
-            self._init_sqlite()
-    
-    def _run_sqlite_migrations(self):
-        """Run SQLite migrations (convert from PostgreSQL schema)"""
-        cursor = self._connection.cursor()
-        
-        migrations = [
-            # Recurring Bookings
-            """
-            CREATE TABLE IF NOT EXISTS recurring_bookings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                customer_phone TEXT NOT NULL,
-                customer_email TEXT,
-                customer_name TEXT,
-                facility_type TEXT NOT NULL,
-                day_of_week INTEGER NOT NULL,
-                time_slot TEXT NOT NULL,
-                duration_hours REAL NOT NULL,
-                frequency TEXT NOT NULL,
-                start_date TEXT NOT NULL,
-                end_date TEXT,
-                next_booking_date TEXT,
-                is_active INTEGER DEFAULT 1,
-                calcom_event_type_id INTEGER,
-                price_per_booking REAL,
-                total_bookings_created INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-            """,
-            
-            # Waitlist
-            """
-            CREATE TABLE IF NOT EXISTS waitlist (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                customer_phone TEXT NOT NULL,
-                customer_email TEXT,
-                customer_name TEXT,
-                facility_type TEXT NOT NULL,
-                requested_date TEXT NOT NULL,
-                requested_time TEXT NOT NULL,
-                duration_hours REAL NOT NULL,
-                priority INTEGER DEFAULT 0,
-                notified_at TEXT,
-                expires_at TEXT,
-                status TEXT DEFAULT 'waiting',
-                notification_sent INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-            """,
-            
-            # Customers
-            """
-            CREATE TABLE IF NOT EXISTS customers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                phone TEXT UNIQUE NOT NULL,
-                email TEXT,
-                name TEXT,
-                tier TEXT DEFAULT 'standard',
-                total_bookings INTEGER DEFAULT 0,
-                total_spent_dollars REAL DEFAULT 0,
-                loyalty_points INTEGER DEFAULT 0,
-                preferences TEXT DEFAULT '{}',
-                voice_print TEXT,
-                communication_preference TEXT DEFAULT 'sms',
-                favorite_facility TEXT,
-                preferred_time_slot TEXT,
-                average_duration_hours REAL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                last_booking_at TEXT,
-                vip_since TEXT
-            )
-            """,
-            
-            # Loyalty Transactions
-            """
-            CREATE TABLE IF NOT EXISTS loyalty_transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                customer_id INTEGER,
-                customer_phone TEXT NOT NULL,
-                transaction_type TEXT NOT NULL,
-                points INTEGER NOT NULL,
-                description TEXT,
-                booking_id TEXT,
-                balance_after INTEGER NOT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (customer_id) REFERENCES customers(id)
-            )
-            """,
-            
-            # Booking Analytics
-            """
-            CREATE TABLE IF NOT EXISTS booking_analytics (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                facility_type TEXT NOT NULL,
-                day_of_week INTEGER NOT NULL,
-                hour INTEGER NOT NULL,
-                booking_count INTEGER DEFAULT 0,
-                revenue_dollars REAL DEFAULT 0,
-                average_duration_hours REAL DEFAULT 0,
-                last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(facility_type, day_of_week, hour)
-            )
-            """,
-            
-            # Emergency Bookings
-            """
-            CREATE TABLE IF NOT EXISTS emergency_bookings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                conversation_uuid TEXT UNIQUE,
-                customer_phone TEXT NOT NULL,
-                customer_name TEXT,
-                facility_type TEXT NOT NULL,
-                booking_date TEXT NOT NULL,
-                booking_time TEXT NOT NULL,
-                urgency_level TEXT DEFAULT 'high',
-                reason TEXT,
-                staff_notified INTEGER DEFAULT 0,
-                staff_notification_sent_at TEXT,
-                status TEXT DEFAULT 'pending',
-                calcom_booking_id TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                resolved_at TEXT
-            )
-            """,
-            
-            # Rebooking Campaigns
-            """
-            CREATE TABLE IF NOT EXISTS rebooking_campaigns (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                customer_phone TEXT NOT NULL,
-                customer_email TEXT,
-                customer_name TEXT,
-                last_booking_id TEXT,
-                last_booking_date TEXT,
-                last_facility_type TEXT,
-                campaign_type TEXT DEFAULT 'standard',
-                outbound_call_scheduled_at TEXT,
-                outbound_call_made_at TEXT,
-                call_status TEXT DEFAULT 'pending',
-                rebooked INTEGER DEFAULT 0,
-                new_booking_id TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-            """,
-            
-            # Email Log
-            """
-            CREATE TABLE IF NOT EXISTS email_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                recipient_email TEXT NOT NULL,
-                recipient_phone TEXT,
-                email_type TEXT NOT NULL,
-                subject TEXT,
-                booking_id TEXT,
-                sendgrid_message_id TEXT,
-                status TEXT DEFAULT 'sent',
-                sent_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-            """,
-            
-            # Group Bookings
-            """
-            CREATE TABLE IF NOT EXISTS group_bookings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                calcom_booking_id TEXT UNIQUE NOT NULL,
-                conversation_uuid TEXT,
-                customer_phone TEXT NOT NULL,
-                coordinator_name TEXT,
-                coordinator_email TEXT,
-                facility_type TEXT NOT NULL,
-                booking_date TEXT NOT NULL,
-                booking_time TEXT NOT NULL,
-                group_size INTEGER NOT NULL,
-                base_price REAL,
-                group_multiplier REAL,
-                total_price REAL,
-                special_requirements TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        ]
-        
-        for migration in migrations:
-            try:
-                cursor.execute(migration)
-            except Exception as e:
-                logger.error(f"Migration failed: {str(e)}")
-        
-        # Run Phase 9 migrations
-        _add_phase9_tables_sqlite(cursor)
-        
-        self._connection.commit()
-        logger.info("SQLite migrations completed (including Phase 9)")
-    
-    def _run_postgres_migrations(self):
-        """Run PostgreSQL migrations from schema file"""
-        try:
-            # Run Phase 6 migrations
-            schema_path_6 = os.path.join(os.path.dirname(__file__), 'migrations', 'phase6_schema.sql')
-            
-            if os.path.exists(schema_path_6):
-                with open(schema_path_6, 'r') as f:
-                    schema = f.read()
+    Returns:
+        The ID of the created call log entry, or None if failed
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Generate a unique ID (cuid style - starts with 'c')
+                import random
+                import string
+                call_id = 'c' + ''.join(random.choices(string.ascii_lowercase + string.digits, k=24))
                 
-                cursor = self._connection.cursor()
-                cursor.execute(schema)
-                logger.info("PostgreSQL Phase 6 migrations completed")
-            else:
-                logger.warning("PostgreSQL Phase 6 schema file not found")
-            
-            # Run Phase 7 migrations
-            schema_path_7 = os.path.join(os.path.dirname(__file__), 'migrations', 'phase7_schema.sql')
-            
-            if os.path.exists(schema_path_7):
-                with open(schema_path_7, 'r') as f:
-                    schema = f.read()
+                # Insert into CallLog table
+                cur.execute("""
+                    INSERT INTO "CallLog" (
+                        id, "callerId", "callerName", duration, intent, outcome,
+                        timestamp, "recordingUrl", transcription, notes, cost,
+                        "createdAt", "updatedAt"
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    RETURNING id
+                """, (
+                    call_id,
+                    caller_id,
+                    caller_name or "Unknown",
+                    duration,
+                    intent,
+                    outcome,
+                    datetime.now(),
+                    recording_url,
+                    transcription,
+                    notes,
+                    cost,
+                    datetime.now(),
+                    datetime.now()
+                ))
                 
-                cursor = self._connection.cursor()
-                cursor.execute(schema)
-                logger.info("PostgreSQL Phase 7 migrations completed")
-            
-            # Run Phase 8 migrations
-            schema_path_8 = os.path.join(os.path.dirname(__file__), 'migrations', 'phase8_schema.sql')
-            
-            if os.path.exists(schema_path_8):
-                with open(schema_path_8, 'r') as f:
-                    schema = f.read()
+                result = cur.fetchone()
+                print(f"✓ Call logged to dashboard: {caller_id} - {intent} - {outcome}")
+                return result['id'] if result else None
                 
-                cursor = self._connection.cursor()
-                cursor.execute(schema)
-                logger.info("PostgreSQL Phase 8 migrations completed")
-            
-            # Run Phase 9 migrations
-            schema_path_9 = os.path.join(os.path.dirname(__file__), 'migrations', 'phase9_schema.sql')
-            
-            if os.path.exists(schema_path_9):
-                with open(schema_path_9, 'r') as f:
-                    schema = f.read()
-                
-                cursor = self._connection.cursor()
-                cursor.execute(schema)
-                logger.info("PostgreSQL Phase 9 migrations completed")
-                
-        except Exception as e:
-            logger.error(f"PostgreSQL migration failed: {str(e)}")
-    
-    @contextmanager
-    def get_cursor(self):
-        """Get a database cursor (context manager)"""
-        cursor = self._connection.cursor()
-        try:
-            yield cursor
-            if self.db_type == 'sqlite':
-                self._connection.commit()
-        except Exception as e:
-            if self.db_type == 'sqlite':
-                self._connection.rollback()
-            logger.error(f"Database error: {str(e)}")
-            raise
-        finally:
-            if self.db_type == 'postgres':
-                cursor.close()
-    
-    def execute(self, query, params=None):
-        """Execute a query and return cursor"""
-        with self.get_cursor() as cursor:
-            cursor.execute(query, params or ())
-            return cursor
-    
-    def fetchone(self, query, params=None):
-        """Execute query and fetch one result"""
-        with self.get_cursor() as cursor:
-            cursor.execute(query, params or ())
-            return cursor.fetchone()
-    
-    def fetchall(self, query, params=None):
-        """Execute query and fetch all results"""
-        with self.get_cursor() as cursor:
-            cursor.execute(query, params or ())
-            return cursor.fetchall()
-    
-    def insert(self, table, data):
-        """Insert a row and return the new ID"""
-        columns = ', '.join(data.keys())
-        placeholders = ', '.join(['?' if self.db_type == 'sqlite' else '%s'] * len(data))
-        query = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
-        
-        with self.get_cursor() as cursor:
-            cursor.execute(query, tuple(data.values()))
-            
-            if self.db_type == 'sqlite':
-                return cursor.lastrowid
-            else:
-                return cursor.fetchone()['id']
-    
-    def update(self, table, data, where_clause, where_params=None):
-        """Update rows"""
-        set_clause = ', '.join([f"{k} = ?" if self.db_type == 'sqlite' else f"{k} = %s" for k in data.keys()])
-        query = f"UPDATE {table} SET {set_clause} WHERE {where_clause}"
-        
-        params = list(data.values())
-        if where_params:
-            params.extend(where_params)
-        
-        with self.get_cursor() as cursor:
-            cursor.execute(query, params)
-            return cursor.rowcount
-    
-    def close(self):
-        """Close database connection"""
-        if self._connection:
-            self._connection.close()
-            logger.info("Database connection closed")
+    except Exception as e:
+        print(f"Failed to log call to dashboard: {e}")
+        return None
 
+def get_recent_calls(limit: int = 10):
+    """Fetch recent calls from the dashboard database."""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT * FROM "CallLog"
+                    ORDER BY timestamp DESC
+                    LIMIT %s
+                """, (limit,))
+                return cur.fetchall()
+    except Exception as e:
+        print(f"Failed to fetch recent calls: {e}")
+        return []
 
-# Global database instance
-db = DatabaseManager()
-
-# Add Phase 9 migration support to SQLite migrations
-def _add_phase9_tables_sqlite(cursor):
-    """Add Phase 9 tables for SQLite"""
-    
-    phase9_migrations = [
-        # Call Recordings
-        """
-        CREATE TABLE IF NOT EXISTS call_recordings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            call_uuid TEXT UNIQUE NOT NULL,
-            file_path TEXT NOT NULL,
-            recording_url TEXT,
-            file_size INTEGER DEFAULT 0,
-            duration_seconds INTEGER DEFAULT 0,
-            format TEXT DEFAULT 'mp3',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        
-        # Call Transcriptions
-        """
-        CREATE TABLE IF NOT EXISTS call_transcriptions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            call_uuid TEXT UNIQUE NOT NULL,
-            transcription_text TEXT NOT NULL,
-            word_count INTEGER DEFAULT 0,
-            char_count INTEGER DEFAULT 0,
-            language TEXT DEFAULT 'en-US',
-            confidence_score REAL DEFAULT 0,
-            audio_file_path TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        
-        # Call Intelligence
-        """
-        CREATE TABLE IF NOT EXISTS call_intelligence (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            call_uuid TEXT UNIQUE NOT NULL,
-            call_score INTEGER DEFAULT 0,
-            success_indicators TEXT,
-            problem_indicators TEXT,
-            upsell_opportunities TEXT,
-            key_phrases TEXT,
-            insights TEXT,
-            sentiment_overall TEXT DEFAULT 'neutral',
-            sentiment_score REAL DEFAULT 0,
-            escalation_recommended INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        
-        # Notifications Log
-        """
-        CREATE TABLE IF NOT EXISTS notifications_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            booking_id TEXT,
-            customer_phone TEXT,
-            customer_email TEXT,
-            notification_type TEXT NOT NULL,
-            channel TEXT,
-            status TEXT DEFAULT 'pending',
-            error_message TEXT,
-            sent_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        
-        # Scheduled Notifications
-        """
-        CREATE TABLE IF NOT EXISTS scheduled_notifications (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            booking_id TEXT NOT NULL,
-            notification_type TEXT NOT NULL,
-            scheduled_time TEXT NOT NULL,
-            booking_data TEXT,
-            status TEXT DEFAULT 'pending',
-            sent_at TEXT,
-            error_message TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        
-        # Customer Portal Users
-        """
-        CREATE TABLE IF NOT EXISTS customer_portal_users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            phone TEXT UNIQUE NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            name TEXT,
-            verification_token TEXT,
-            is_verified INTEGER DEFAULT 0,
-            reset_token TEXT,
-            reset_token_expires TEXT,
-            last_login TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        
-        # Customer Booking History
-        """
-        CREATE TABLE IF NOT EXISTS customer_booking_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            customer_phone TEXT NOT NULL,
-            booking_id TEXT NOT NULL,
-            facility_type TEXT NOT NULL,
-            booking_date TEXT NOT NULL,
-            booking_time TEXT NOT NULL,
-            duration_hours REAL NOT NULL,
-            price REAL,
-            status TEXT DEFAULT 'confirmed',
-            created_via TEXT DEFAULT 'phone',
-            can_cancel INTEGER DEFAULT 1,
-            can_reschedule INTEGER DEFAULT 1,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        
-        # Notification Templates
-        """
-        CREATE TABLE IF NOT EXISTS notification_templates (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            template_name TEXT UNIQUE NOT NULL,
-            template_type TEXT NOT NULL,
-            subject TEXT NOT NULL,
-            html_content TEXT NOT NULL,
-            variables TEXT,
-            is_active INTEGER DEFAULT 1,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    ]
-    
-    for migration in phase9_migrations:
-        try:
-            cursor.execute(migration)
-        except Exception as e:
-            logger.error(f"Phase 9 SQLite migration failed: {str(e)}")
-
+def test_database_connection():
+    """Test the database connection."""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM \"CallLog\"")
+                count = cur.fetchone()[0]
+                print(f"✓ Database connection successful! Found {count} call logs.")
+                return True
+    except Exception as e:
+        print(f"✗ Database connection failed: {e}")
+        return False

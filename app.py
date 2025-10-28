@@ -16,6 +16,7 @@ from pricing import PricingEngine
 from escalation import EscalationHandler
 from knowledge_base import KnowledgeBase
 import ivr_config
+import database
 
 # Load environment variables
 load_dotenv()
@@ -140,6 +141,37 @@ def debug_last_dtmf():
         'instructions': 'Make a test call, press a button, then refresh this page to see what was received.'
     })
 
+@app.route('/test/database', methods=['GET'])
+def test_database():
+    """Test endpoint to verify database connection."""
+    try:
+        if database.test_database_connection():
+            recent_calls = database.get_recent_calls(limit=5)
+            return jsonify({
+                'status': 'success',
+                'message': 'Database connection working!',
+                'recent_calls': [
+                    {
+                        'id': call.get('id'),
+                        'caller_id': call.get('callerId'),
+                        'intent': call.get('intent'),
+                        'outcome': call.get('outcome'),
+                        'timestamp': str(call.get('timestamp'))
+                    }
+                    for call in recent_calls
+                ]
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Database connection failed'
+            }), 500
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
 @app.route('/webhooks/answer', methods=['GET', 'POST'])
 def answer_call():
     """
@@ -179,7 +211,7 @@ def answer_call():
 
 @app.route('/webhooks/events', methods=['GET', 'POST'])
 def handle_events():
-    """Handle Vonage Voice API events."""
+    """Handle Vonage Voice API events and log calls to dashboard."""
     try:
         # Handle both GET and POST requests from Vonage
         if request.method == 'POST':
@@ -188,6 +220,77 @@ def handle_events():
             event_data = request.args.to_dict()
         
         print(f"Received event: {event_data}")
+        
+        # Extract event details
+        event_status = event_data.get('status', '')
+        conversation_uuid = event_data.get('conversation_uuid', '')
+        from_number = event_data.get('from', '')
+        duration = event_data.get('duration', 0)
+        
+        # Track call start time
+        if event_status == 'started':
+            if conversation_uuid not in call_sessions:
+                call_sessions[conversation_uuid] = {
+                    'from_number': from_number,
+                    'start_time': datetime.now(),
+                    'intent': 'unknown',
+                    'outcome': 'in_progress',
+                    'context': {}
+                }
+            else:
+                call_sessions[conversation_uuid]['start_time'] = datetime.now()
+        
+        # Log call completion to dashboard
+        elif event_status in ['completed', 'answered', 'unanswered', 'failed', 'rejected', 'timeout']:
+            # Get session data
+            session = call_sessions.get(conversation_uuid, {})
+            
+            # Calculate duration if available
+            if duration == 0 and 'start_time' in session:
+                duration = int((datetime.now() - session['start_time']).total_seconds())
+            
+            # Determine intent and outcome from session
+            intent = session.get('intent', session.get('intent_type', session.get('department', 'unknown')))
+            outcome = event_status
+            
+            # If call was answered and lasted more than a few seconds, mark as completed
+            if event_status == 'completed' and duration > 5:
+                outcome = 'completed'
+            elif event_status in ['unanswered', 'failed', 'rejected', 'timeout']:
+                outcome = 'failed'
+            
+            # Get transcription/notes from session
+            notes = None
+            if 'conversation_history' in session:
+                notes = "\n".join([
+                    f"{'User' if msg.get('role') == 'user' else 'AI'}: {msg.get('content', '')}"
+                    for msg in session['conversation_history'][-5:]  # Last 5 messages
+                ])
+            
+            # Estimate call cost (Vonage charges approximately $0.007 per minute)
+            cost = (duration / 60) * 0.007 if duration > 0 else 0.0
+            
+            # Log to dashboard database
+            try:
+                database.log_call_to_dashboard(
+                    caller_id=from_number or 'unknown',
+                    caller_name=session.get('caller_name', 'Unknown'),
+                    duration=int(duration) if duration else 0,
+                    intent=intent,
+                    outcome=outcome,
+                    recording_url=event_data.get('recording_url'),
+                    transcription=None,  # Not available yet
+                    notes=notes,
+                    cost=round(cost, 4)
+                )
+                print(f"✓ Call logged to dashboard: {from_number} - {intent} - {outcome}")
+            except Exception as log_error:
+                print(f"Warning: Failed to log call to dashboard: {log_error}")
+            
+            # Clean up session after logging
+            if conversation_uuid in call_sessions:
+                del call_sessions[conversation_uuid]
+        
         return jsonify({'status': 'ok'})
     except Exception as e:
         print(f"Error handling event: {e}")
@@ -327,6 +430,7 @@ def handle_dtmf():
             # Store in session
             session['selected_option'] = option['name']
             session['intent_type'] = option['intent']
+            session['intent'] = option['intent']  # For logging consistency
             
             # Handle operator transfer
             if dtmf == '0':
@@ -598,9 +702,15 @@ def handle_booking_request(entities, session):
         )
         
         if booking_result['success']:
+            # Track successful booking
+            session['outcome'] = 'booking_success'
+            session['intent'] = 'booking'
             response_text = f"Perfect! I've reserved {booking_details['service_type'].replace('_', ' ')} for {booking_details['date_time']} at ${booking_details['rate']} per hour. Your booking confirmation is {booking_result['booking_id']}. You'll receive a confirmation text shortly. Is there anything else I can help you with?"
             return create_speech_input_ncco(response_text, 'booking_complete')
         else:
+            # Track failed booking
+            session['outcome'] = 'booking_failed'
+            session['intent'] = 'booking'
             response_text = "I'm sorry, there was an issue creating your booking. Let me transfer you to our staff for assistance."
             return escalation_handler.create_escalation_ncco('booking_error', entities)
     
