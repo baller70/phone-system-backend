@@ -143,58 +143,36 @@ def debug_last_dtmf():
 
 @app.route('/test/database', methods=['GET'])
 def test_database():
-    """Test endpoint to verify database connection."""
-    import traceback
-    
+    """Test endpoint to verify dashboard API connection."""
     try:
-        # Use the same DATABASE_URL that database.py uses
-        db_url = database.DATABASE_URL
-        env_var_set = bool(os.getenv('DATABASE_URL'))
-        
-        if not db_url:
-            return jsonify({
-                'status': 'error',
-                'message': 'DATABASE_URL is None',
-                'env_var_set': env_var_set
-            }), 500
-        
-        # Show partial connection string for debugging (hide password)
-        db_info = db_url.split('@')[1] if '@' in db_url else 'invalid format'
-        
-        # Try to actually connect and get detailed error
-        try:
-            import psycopg2
-            conn = psycopg2.connect(db_url)
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM \"CallLog\"")
-                count = cur.fetchone()[0]
-            conn.close()
-            
+        if database.test_dashboard_connection():
+            recent_calls = database.get_recent_calls(limit=3)
             return jsonify({
                 'status': 'success',
-                'message': 'Database connection working!',
-                'database_host': db_info,
-                'call_count': count,
-                'env_var_set': env_var_set,
-                'using_default': not env_var_set
+                'message': 'Dashboard API connection working!',
+                'dashboard_url': database.DASHBOARD_API_URL,
+                'recent_calls_count': len(recent_calls),
+                'sample_calls': [
+                    {
+                        'callerId': call.get('callerId'),
+                        'intent': call.get('intent'),
+                        'outcome': call.get('outcome')
+                    }
+                    for call in recent_calls[:3]
+                ]
             })
-        except Exception as db_error:
+        else:
             return jsonify({
                 'status': 'error',
-                'message': str(db_error),
-                'error_type': type(db_error).__name__,
-                'database_host': db_info,
-                'traceback': traceback.format_exc(),
-                'env_var_set': env_var_set,
-                'using_default': not env_var_set
+                'message': 'Dashboard API connection failed',
+                'dashboard_url': database.DASHBOARD_API_URL,
+                'note': 'Check Render logs for detailed error'
             }), 500
-            
     except Exception as e:
         return jsonify({
             'status': 'error',
             'message': str(e),
-            'type': type(e).__name__,
-            'traceback': traceback.format_exc()
+            'type': type(e).__name__
         }), 500
 
 @app.route('/webhooks/answer', methods=['GET', 'POST'])

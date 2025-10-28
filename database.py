@@ -1,33 +1,16 @@
 
 """
-Database helper for logging calls to the dashboard database.
+Database helper for logging calls to the dashboard via API.
+Instead of direct database connection, we call the dashboard API endpoints.
 """
 
 import os
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import requests
 from datetime import datetime
-from contextlib import contextmanager
 
-# Database connection string - fetched from dashboard
-DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://role_151b3281cd:1OhWAdgclIqVA92DmfBBy95WxugHLZnk@db-151b3281cd.db002.hosteddb.reai.io:5432/151b3281cd?connect_timeout=15')
-
-@contextmanager
-def get_db_connection():
-    """Create a database connection context manager."""
-    conn = None
-    try:
-        conn = psycopg2.connect(DATABASE_URL)
-        yield conn
-        conn.commit()
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        print(f"Database error: {e}")
-        raise
-    finally:
-        if conn:
-            conn.close()
+# Dashboard API base URL
+DASHBOARD_API_URL = os.getenv('DASHBOARD_API_URL', 'https://phone-system-dashboa-8em0c9.abacusai.app')
+DASHBOARD_API_KEY = os.getenv('DASHBOARD_API_KEY', 'internal_api_key_12345')
 
 def log_call_to_dashboard(
     caller_id: str,
@@ -41,7 +24,7 @@ def log_call_to_dashboard(
     cost: float = 0.0
 ):
     """
-    Log a call to the dashboard database.
+    Log a call to the dashboard via API.
     
     Args:
         caller_id: Phone number of the caller
@@ -58,76 +41,80 @@ def log_call_to_dashboard(
         The ID of the created call log entry, or None if failed
     """
     try:
-        with get_db_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # Generate a unique ID (cuid style - starts with 'c')
-                import random
-                import string
-                call_id = 'c' + ''.join(random.choices(string.ascii_lowercase + string.digits, k=24))
-                
-                # Insert into CallLog table
-                cur.execute("""
-                    INSERT INTO "CallLog" (
-                        id, "callerId", "callerName", duration, intent, outcome,
-                        timestamp, "recordingUrl", transcription, notes, cost,
-                        "createdAt", "updatedAt"
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                    )
-                    RETURNING id
-                """, (
-                    call_id,
-                    caller_id,
-                    caller_name or "Unknown",
-                    duration,
-                    intent,
-                    outcome,
-                    datetime.now(),
-                    recording_url,
-                    transcription,
-                    notes,
-                    cost,
-                    datetime.now(),
-                    datetime.now()
-                ))
-                
-                result = cur.fetchone()
-                print(f"✓ Call logged to dashboard: {caller_id} - {intent} - {outcome}")
-                return result['id'] if result else None
+        url = f"{DASHBOARD_API_URL}/api/call-logs"
+        payload = {
+            "callerId": caller_id,
+            "callerName": caller_name or "Unknown",
+            "duration": duration,
+            "intent": intent,
+            "outcome": outcome,
+            "recordingUrl": recording_url,
+            "transcription": transcription,
+            "notes": notes,
+            "cost": cost
+        }
+        
+        headers = {
+            "Content-Type": "application/json",
+            "X-API-Key": DASHBOARD_API_KEY
+        }
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        
+        if response.status_code in [200, 201]:
+            result = response.json()
+            print(f"✓ Call logged to dashboard: {caller_id} - {intent} - {outcome}")
+            return result.get('id')
+        else:
+            print(f"Failed to log call: HTTP {response.status_code} - {response.text}")
+            return None
                 
     except Exception as e:
         print(f"Failed to log call to dashboard: {e}")
         return None
 
 def get_recent_calls(limit: int = 10):
-    """Fetch recent calls from the dashboard database."""
+    """Fetch recent calls from the dashboard via API."""
     try:
-        with get_db_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("""
-                    SELECT * FROM "CallLog"
-                    ORDER BY timestamp DESC
-                    LIMIT %s
-                """, (limit,))
-                return cur.fetchall()
+        url = f"{DASHBOARD_API_URL}/api/call-logs?limit={limit}"
+        headers = {"X-API-Key": DASHBOARD_API_KEY}
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return data.get('calls', [])
+        else:
+            print(f"Failed to fetch calls: HTTP {response.status_code}")
+            return []
     except Exception as e:
         print(f"Failed to fetch recent calls: {e}")
         return []
 
-def test_database_connection():
-    """Test the database connection."""
+def test_dashboard_connection():
+    """Test the dashboard API connection."""
     try:
-        print(f"Testing database connection...")
-        print(f"DATABASE_URL set: {bool(os.getenv('DATABASE_URL'))}")
-        with get_db_connection() as conn:
-            print(f"Connection established")
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM \"CallLog\"")
-                count = cur.fetchone()[0]
-                print(f"✓ Database connection successful! Found {count} call logs.")
-                return True
+        print(f"Testing dashboard API connection...")
+        print(f"Dashboard URL: {DASHBOARD_API_URL}")
+        
+        url = f"{DASHBOARD_API_URL}/api/call-logs?limit=1"
+        headers = {"X-API-Key": DASHBOARD_API_KEY}
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            call_count = len(data.get('calls', []))
+            print(f"✓ Dashboard API connection successful! Can access call logs.")
+            return True
+        elif response.status_code == 401:
+            print(f"✗ Dashboard API connection failed: Unauthorized (check API key)")
+            return False
+        else:
+            print(f"✗ Dashboard API connection failed: HTTP {response.status_code}")
+            return False
     except Exception as e:
-        print(f"✗ Database connection failed: {type(e).__name__}: {e}")
+        print(f"✗ Dashboard API connection failed: {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
         return False
