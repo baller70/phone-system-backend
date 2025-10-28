@@ -117,12 +117,17 @@ def get_recent_calls(limit: int = 10):
 def test_database_connection():
     """Test the database connection."""
     try:
+        print(f"Testing database connection...")
+        print(f"DATABASE_URL set: {bool(os.getenv('DATABASE_URL'))}")
         with get_db_connection() as conn:
+            print(f"Connection established")
             with conn.cursor() as cur:
                 cur.execute("SELECT COUNT(*) FROM \"CallLog\"")
                 count = cur.fetchone()[0]
                 print(f"✓ Database connection successful! Found {count} call logs.")
                 return True
     except Exception as e:
-        print(f"✗ Database connection failed: {e}")
+        print(f"✗ Database connection failed: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         return False

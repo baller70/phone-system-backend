@@ -144,32 +144,54 @@ def debug_last_dtmf():
 @app.route('/test/database', methods=['GET'])
 def test_database():
     """Test endpoint to verify database connection."""
+    import traceback
+    
     try:
-        if database.test_database_connection():
-            recent_calls = database.get_recent_calls(limit=5)
+        # Check if DATABASE_URL is set
+        db_url = os.getenv('DATABASE_URL')
+        if not db_url:
+            return jsonify({
+                'status': 'error',
+                'message': 'DATABASE_URL environment variable not set',
+                'solution': 'Add DATABASE_URL to Render environment variables',
+                'has_default': 'Yes - using hardcoded default'
+            }), 500
+        
+        # Show partial connection string for debugging (hide password)
+        db_info = db_url.split('@')[1] if '@' in db_url else 'invalid format'
+        
+        # Try to actually connect and get detailed error
+        try:
+            import psycopg2
+            conn = psycopg2.connect(db_url)
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM \"CallLog\"")
+                count = cur.fetchone()[0]
+            conn.close()
+            
             return jsonify({
                 'status': 'success',
                 'message': 'Database connection working!',
-                'recent_calls': [
-                    {
-                        'id': call.get('id'),
-                        'caller_id': call.get('callerId'),
-                        'intent': call.get('intent'),
-                        'outcome': call.get('outcome'),
-                        'timestamp': str(call.get('timestamp'))
-                    }
-                    for call in recent_calls
-                ]
+                'database_host': db_info,
+                'call_count': count,
+                'psycopg2_installed': True
             })
-        else:
+        except Exception as db_error:
             return jsonify({
                 'status': 'error',
-                'message': 'Database connection failed'
+                'message': str(db_error),
+                'error_type': type(db_error).__name__,
+                'database_host': db_info,
+                'traceback': traceback.format_exc(),
+                'psycopg2_installed': True
             }), 500
+            
     except Exception as e:
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': str(e),
+            'type': type(e).__name__,
+            'traceback': traceback.format_exc()
         }), 500
 
 @app.route('/webhooks/answer', methods=['GET', 'POST'])
