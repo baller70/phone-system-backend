@@ -156,8 +156,7 @@ def handle_events():
 
 @app.route('/webhooks/dtmf', methods=['GET', 'POST'])
 def handle_dtmf():
-    """Handle DTMF (keypad) input from IVR menu - using dashboard settings."""
-    from ivr_config import get_menu_option_by_key, get_ivr_settings
+    """Handle DTMF (keypad) input from IVR menu - SIMPLIFIED FOR TESTING."""
     
     try:
         # Handle both GET and POST requests
@@ -166,13 +165,16 @@ def handle_dtmf():
         else:
             dtmf_data = request.args.to_dict()
         
-        print(f"DTMF webhook called with data: {dtmf_data}")
+        print(f"\n===== DTMF WEBHOOK CALLED =====")
+        print(f"Method: {request.method}")
+        print(f"Full request data: {dtmf_data}")
+        print(f"Headers: {dict(request.headers)}")
         
         conversation_uuid = dtmf_data.get('conversation_uuid', '')
         dtmf = dtmf_data.get('dtmf', '')
         timed_out = dtmf_data.get('timed_out', False)
         
-        print(f"Conversation UUID: {conversation_uuid}, DTMF: '{dtmf}' (type: {type(dtmf)}), Timed out: {timed_out}")
+        print(f"Parsed - UUID: {conversation_uuid}, DTMF: '{dtmf}' (type: {type(dtmf)}), Timed out: {timed_out}")
         
         # Initialize session if it doesn't exist
         if conversation_uuid not in call_sessions:
@@ -187,98 +189,95 @@ def handle_dtmf():
         
         # Handle timeout - replay menu
         if timed_out or not dtmf:
+            print("DTMF timed out or empty, replaying menu")
             return jsonify(create_ivr_menu_ncco(replay=True))
         
         # Convert DTMF to string if needed
         dtmf = str(dtmf).strip()
-        print(f"Processed DTMF: '{dtmf}' (type: {type(dtmf)})")
+        print(f"Normalized DTMF: '{dtmf}'")
         
-        # DEBUG: Print all available menu options
-        settings = get_ivr_settings()
-        menu_options = settings.get('menuOptions', [])
-        print(f"Available menu options: {[(opt.get('keyPress'), opt.get('optionName'), opt.get('isActive')) for opt in menu_options]}")
+        # HARDCODED MENU OPTIONS FOR TESTING
+        # This eliminates the dashboard API as a potential issue
+        STATIC_MENU = {
+            '1': {
+                'name': 'Basketball',
+                'greeting': 'Great! I can help you book a basketball court. What date and time would you like?',
+                'intent': 'basketball_rental'
+            },
+            '2': {
+                'name': 'Parties',
+                'greeting': 'Perfect! Let me help you plan a birthday party. How many guests are you expecting?',
+                'intent': 'party_booking'
+            },
+            '9': {
+                'name': 'AI Assistant',
+                'greeting': "Hi! I'm your AI assistant. How can I help you today?",
+                'intent': 'general_inquiry'
+            },
+            '0': {
+                'name': 'Operator',
+                'greeting': None,  # Will transfer
+                'intent': 'transfer'
+            }
+        }
         
-        # Get menu option from dashboard settings
-        menu_option = get_menu_option_by_key(dtmf)
-        print(f"Found menu option: {menu_option.get('optionName') if menu_option else 'None'}")
+        print(f"Checking DTMF '{dtmf}' against static menu: {list(STATIC_MENU.keys())}")
         
-        if menu_option:
-            # Store menu option info in session
-            session['selected_option'] = menu_option.get('optionName', '')
-            session['intent_type'] = menu_option.get('intentType', 'general_inquiry')
+        if dtmf in STATIC_MENU:
+            option = STATIC_MENU[dtmf]
+            print(f"✓ MATCHED! Option: {option['name']}")
             
-            # Special handling for operator/transfer
-            action_type = menu_option.get('actionType', 'ai_conversation')
-            if action_type == 'transfer' or dtmf == '0':
+            # Store in session
+            session['selected_option'] = option['name']
+            session['intent_type'] = option['intent']
+            
+            # Handle operator transfer
+            if dtmf == '0':
+                print("Transferring to operator...")
                 return jsonify(create_transfer_ncco())
             
-            # Set AI context from dashboard settings
-            ai_context = menu_option.get('aiContext', '')
-            if ai_context:
-                session['context']['ai_context'] = ai_context
+            # Set context
+            session['context']['service_type'] = option['intent']
             
-            # Set service type based on intent
-            intent_type = menu_option.get('intentType', '')
-            if intent_type:
-                session['context']['service_type'] = intent_type
+            # Return department greeting and speech input
+            department_greeting = option['greeting']
+            print(f"Returning greeting: {department_greeting}")
             
-            # Create department greeting using dashboard settings
-            department_greeting = menu_option.get('departmentGreeting', 'How can I help you today?')
-            
-            # Check if option has custom audio
-            if menu_option.get('useAudio') and menu_option.get('audioUrl'):
-                # Use audio greeting
-                ncco = [
-                    {
-                        "action": "stream",
-                        "streamUrl": [menu_option.get('audioUrl')],
-                        "bargeIn": True
-                    },
-                    {
-                        "action": "input",
-                        "eventUrl": [f"{BASE_URL}/webhooks/speech"],
-                        "type": ["speech"],
-                        "speech": {
-                            "endOnSilence": 3,
-                            "language": "en-US",
-                            "context": ["sports", "basketball", "booking", "rental", "party", "price", "availability"],
-                            "startTimeout": 10,
-                            "maxDuration": 15
-                        }
+            ncco = [
+                {
+                    "action": "talk",
+                    "text": department_greeting,
+                    "voiceName": "Amy",
+                    "bargeIn": True
+                },
+                {
+                    "action": "input",
+                    "eventUrl": [f"{BASE_URL}/webhooks/speech"],
+                    "type": ["speech"],
+                    "speech": {
+                        "endOnSilence": 3,
+                        "language": "en-US",
+                        "context": ["sports", "basketball", "booking", "rental", "party", "price", "availability"],
+                        "startTimeout": 10,
+                        "maxDuration": 15
                     }
-                ]
-            else:
-                # Use text-to-speech
-                ncco = [
-                    {
-                        "action": "talk",
-                        "text": department_greeting,
-                        "voiceName": "Amy",
-                        "bargeIn": True
-                    },
-                    {
-                        "action": "input",
-                        "eventUrl": [f"{BASE_URL}/webhooks/speech"],
-                        "type": ["speech"],
-                        "speech": {
-                            "endOnSilence": 3,
-                            "language": "en-US",
-                            "context": ["sports", "basketball", "booking", "rental", "party", "price", "availability"],
-                            "startTimeout": 10,
-                            "maxDuration": 15
-                        }
-                    }
-                ]
+                }
+            ]
             
+            print(f"NCCO to return: {json.dumps(ncco, indent=2)}")
+            print(f"===============================\n")
             return jsonify(ncco)
         else:
             # Invalid input - replay menu
+            print(f"✗ NO MATCH for DTMF '{dtmf}'. Valid options: {list(STATIC_MENU.keys())}")
+            print(f"===============================\n")
             return jsonify(create_ivr_menu_ncco(invalid=True))
         
     except Exception as e:
-        print(f"Error processing DTMF: {e}")
+        print(f"ERROR processing DTMF: {e}")
         import traceback
         traceback.print_exc()
+        print(f"===============================\n")
         return jsonify(create_error_ncco())
 
 @app.route('/webhooks/fallback', methods=['GET', 'POST'])
@@ -573,76 +572,47 @@ def create_greeting_ncco():
     return create_ivr_menu_ncco()
 
 def create_ivr_menu_ncco(replay=False, invalid=False):
-    """Create IVR menu NCCO with DTMF input options - using dashboard settings."""
-    from ivr_config import get_ivr_settings, build_menu_text
+    """Create IVR menu NCCO with DTMF input options - SIMPLIFIED FOR TESTING."""
     
-    # Get settings from dashboard
-    settings = get_ivr_settings()
+    # SIMPLIFIED GREETING - no dashboard fetch for now to isolate the issue
+    # This will help us determine if the problem is with the DTMF capture or the settings
     
-    # Build the greeting text
     if invalid:
-        greeting_text = settings.get('invalidOptionMessage', "I'm sorry, that's not a valid option.") + " "
+        greeting_text = "Sorry, invalid option. "
     elif replay:
-        greeting_text = settings.get('replayMessage', "I didn't catch that.") + " "
+        greeting_text = "I didn't catch that. "
     else:
-        greeting_text = settings.get('greetingText', 'Thank you for calling Premier Sports Facility!') + " "
+        greeting_text = "Welcome to Premier Sports. "
     
-    # Build menu text from active options
-    menu_text = build_menu_text(settings)
+    # SIMPLE STATIC MENU
+    menu_text = "Press 1 for basketball, press 2 for parties, press 9 for the AI assistant, or press 0 for an operator."
     
     full_text = greeting_text + menu_text
     
-    # Get voice and timeout settings
-    voice_name = settings.get('voiceName', 'Amy')
-    timeout = settings.get('timeoutSeconds', 10)
+    print(f"\n===== IVR MENU NCCO CREATED =====")
+    print(f"Full text: {full_text}")
+    print(f"DTMF webhook URL: {BASE_URL}/webhooks/dtmf")
+    print(f"==================================\n")
     
-    # CRITICAL FIX: Disable bargeIn to prevent losing DTMF key presses
-    # With bargeIn=True, pressing a key interrupts the talk but the key press is LOST
-    # With bargeIn=False, users must wait for greeting to finish, then press a key
-    # This is more reliable and ensures DTMF is properly captured
-    
-    # Check if using audio greeting (only for initial greeting, not replays/errors)
-    if not replay and not invalid and settings.get('useAudioGreeting') and settings.get('greetingAudioUrl'):
-        # Use audio file for greeting
-        return [
-            {
-                "action": "stream",
-                "streamUrl": [settings.get('greetingAudioUrl')],
-                "bargeIn": False
-            },
-            {
-                "action": "input",
-                "eventUrl": [f"{BASE_URL}/webhooks/dtmf"],
-                "type": ["dtmf"],
-                "dtmf": {
-                    "timeOut": timeout,
-                    "maxDigits": 1,
-                    "submitOnHash": False
-                }
+    # Return NCCO with talk and input actions
+    return [
+        {
+            "action": "talk",
+            "text": full_text,
+            "voiceName": "Amy",
+            "bargeIn": False  # User must wait for greeting to complete
+        },
+        {
+            "action": "input",
+            "eventUrl": [f"{BASE_URL}/webhooks/dtmf"],
+            "type": ["dtmf"],
+            "dtmf": {
+                "timeOut": 10,
+                "maxDigits": 1,
+                "submitOnHash": False
             }
-        ]
-    else:
-        # Use text-to-speech WITHOUT bargeIn
-        # User must wait for greeting to complete before pressing a key
-        # This ensures DTMF input is reliably captured
-        return [
-            {
-                "action": "talk",
-                "text": full_text,
-                "voiceName": voice_name,
-                "bargeIn": False
-            },
-            {
-                "action": "input",
-                "eventUrl": [f"{BASE_URL}/webhooks/dtmf"],
-                "type": ["dtmf"],
-                "dtmf": {
-                    "timeOut": timeout,
-                    "maxDigits": 1,
-                    "submitOnHash": False
-                }
-            }
-        ]
+        }
+    ]
 
 def create_department_greeting_ncco(menu_option):
     """Create department-specific greeting after menu selection."""
