@@ -162,10 +162,26 @@ def get_menu_option_by_key(key: str) -> Optional[Dict]:
     """
     settings = get_ivr_settings()
     
+    # Ensure key is a string for comparison
+    key = str(key).strip()
+    
+    print(f"[IVR CONFIG] Looking for menu option with key: '{key}'")
+    logger.info(f"Looking for menu option with key: '{key}'")
+    
     for option in settings.get('menuOptions', []):
-        if option.get('keyPress') == key and option.get('isActive', True):
+        option_key = str(option.get('keyPress', '')).strip()
+        is_active = option.get('isActive', True)
+        
+        print(f"[IVR CONFIG] Comparing key '{key}' with option key '{option_key}', active: {is_active}, match: {option_key == key}")
+        logger.info(f"Comparing key '{key}' with option key '{option_key}', active: {is_active}, match: {option_key == key}")
+        
+        if option_key == key and is_active:
+            print(f"[IVR CONFIG] ✓ Found matching option: {option.get('optionName')}")
+            logger.info(f"Found matching option: {option.get('optionName')}")
             return option
     
+    print(f"[IVR CONFIG] ✗ No matching menu option found for key: '{key}'")
+    logger.warning(f"No matching menu option found for key: '{key}'")
     return None
 
 

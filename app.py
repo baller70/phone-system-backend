@@ -157,7 +157,7 @@ def handle_events():
 @app.route('/webhooks/dtmf', methods=['GET', 'POST'])
 def handle_dtmf():
     """Handle DTMF (keypad) input from IVR menu - using dashboard settings."""
-    from ivr_config import get_menu_option_by_key
+    from ivr_config import get_menu_option_by_key, get_ivr_settings
     
     try:
         # Handle both GET and POST requests
@@ -172,7 +172,7 @@ def handle_dtmf():
         dtmf = dtmf_data.get('dtmf', '')
         timed_out = dtmf_data.get('timed_out', False)
         
-        print(f"Conversation UUID: {conversation_uuid}, DTMF: '{dtmf}', Timed out: {timed_out}")
+        print(f"Conversation UUID: {conversation_uuid}, DTMF: '{dtmf}' (type: {type(dtmf)}), Timed out: {timed_out}")
         
         # Initialize session if it doesn't exist
         if conversation_uuid not in call_sessions:
@@ -189,8 +189,18 @@ def handle_dtmf():
         if timed_out or not dtmf:
             return jsonify(create_ivr_menu_ncco(replay=True))
         
+        # Convert DTMF to string if needed
+        dtmf = str(dtmf).strip()
+        print(f"Processed DTMF: '{dtmf}' (type: {type(dtmf)})")
+        
+        # DEBUG: Print all available menu options
+        settings = get_ivr_settings()
+        menu_options = settings.get('menuOptions', [])
+        print(f"Available menu options: {[(opt.get('keyPress'), opt.get('optionName'), opt.get('isActive')) for opt in menu_options]}")
+        
         # Get menu option from dashboard settings
         menu_option = get_menu_option_by_key(dtmf)
+        print(f"Found menu option: {menu_option.get('optionName') if menu_option else 'None'}")
         
         if menu_option:
             # Store menu option info in session
