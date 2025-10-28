@@ -890,6 +890,51 @@ def health_check():
         'version': '1.1-ivr-integrated'
     })
 
+@app.route('/debug/ivr-settings', methods=['GET'])
+def debug_ivr_settings():
+    """Debug endpoint to see what IVR settings the backend is using."""
+    try:
+        # Fetch current IVR settings
+        settings = ivr_config.get_ivr_settings()
+        
+        # Build the greeting text that would be announced
+        greeting_text = settings.get('greetingText', 'No greeting')
+        
+        # Build menu text
+        menu_options = settings.get('menuOptions', [])
+        menu_text_parts = []
+        for option in menu_options:
+            if option.get('isActive', True):
+                menu_text_parts.append(option.get('optionText', ''))
+        
+        full_menu_text = ' '.join(menu_text_parts)
+        
+        return jsonify({
+            'status': 'success',
+            'dashboard_url': ivr_config.DASHBOARD_URL,
+            'api_endpoint': f"{ivr_config.DASHBOARD_URL}/api/public/ivr-settings",
+            'greeting_text': greeting_text,
+            'full_announcement': greeting_text + ' ' + full_menu_text,
+            'menu_options': [
+                {
+                    'key': opt.get('keyPress'),
+                    'name': opt.get('optionName'),
+                    'announcement': opt.get('optionText'),
+                    'department_greeting': opt.get('departmentGreeting'),
+                    'active': opt.get('isActive', True)
+                }
+                for opt in menu_options
+            ],
+            'total_options': len(menu_options),
+            'active_options': len([o for o in menu_options if o.get('isActive', True)]),
+            'cache_status': 'cached' if ivr_config._ivr_cache['settings'] else 'not_cached'
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     debug = os.getenv('FLASK_ENV') == 'development'
