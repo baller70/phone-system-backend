@@ -92,6 +92,14 @@ IVR_MENU = {
 # Session storage (in production, use Redis or database)
 call_sessions = {}
 
+# Debug storage for last DTMF input
+last_dtmf_debug = {
+    'timestamp': None,
+    'raw_data': None,
+    'dtmf_value': None,
+    'matched': None
+}
+
 @app.route('/', methods=['GET'])
 def index():
     """Root endpoint for health checks."""
@@ -120,6 +128,14 @@ def test_dtmf():
             "voiceName": "Amy"
         }
     ])
+
+@app.route('/debug/last-dtmf', methods=['GET'])
+def debug_last_dtmf():
+    """View the last DTMF input received for debugging."""
+    return jsonify({
+        'last_dtmf_input': last_dtmf_debug,
+        'instructions': 'Make a test call, press a button, then refresh this page to see what was received.'
+    })
 
 @app.route('/webhooks/answer', methods=['GET', 'POST'])
 def answer_call():
@@ -231,6 +247,12 @@ def handle_dtmf():
         dtmf = str(dtmf).strip()
         print(f"Normalized DTMF: '{dtmf}'")
         
+        # Store in debug storage for easy viewing
+        last_dtmf_debug['timestamp'] = datetime.now().isoformat()
+        last_dtmf_debug['raw_data'] = dtmf_data
+        last_dtmf_debug['dtmf_value'] = dtmf
+        last_dtmf_debug['dtmf_type'] = str(type(dtmf))
+        
         # HARDCODED MENU OPTIONS FOR TESTING
         # This eliminates the dashboard API as a potential issue
         STATIC_MENU = {
@@ -261,6 +283,10 @@ def handle_dtmf():
         if dtmf in STATIC_MENU:
             option = STATIC_MENU[dtmf]
             print(f"✓ MATCHED! Option: {option['name']}")
+            
+            # Update debug storage
+            last_dtmf_debug['matched'] = True
+            last_dtmf_debug['matched_option'] = option['name']
             
             # Store in session
             session['selected_option'] = option['name']
@@ -305,6 +331,12 @@ def handle_dtmf():
         else:
             # Invalid input - replay menu
             print(f"✗ NO MATCH for DTMF '{dtmf}'. Valid options: {list(STATIC_MENU.keys())}")
+            
+            # Update debug storage
+            last_dtmf_debug['matched'] = False
+            last_dtmf_debug['matched_option'] = None
+            last_dtmf_debug['valid_options'] = list(STATIC_MENU.keys())
+            
             print(f"===============================\n")
             return jsonify(create_ivr_menu_ncco(invalid=True))
         
