@@ -101,6 +101,26 @@ def index():
         'version': '1.0'
     }), 200
 
+@app.route('/test/dtmf', methods=['GET', 'POST'])
+def test_dtmf():
+    """Test endpoint to verify DTMF handling is working."""
+    print(f"\n===== TEST DTMF ENDPOINT HIT =====")
+    if request.method == 'POST':
+        data = request.get_json() or request.form.to_dict()
+    else:
+        data = request.args.to_dict()
+    
+    print(f"Test data received: {data}")
+    
+    # Return a simple response
+    return jsonify([
+        {
+            "action": "talk",
+            "text": f"Test DTMF endpoint received. You pressed {data.get('dtmf', 'unknown')}.",
+            "voiceName": "Amy"
+        }
+    ])
+
 @app.route('/webhooks/answer', methods=['GET', 'POST'])
 def answer_call():
     """
@@ -159,15 +179,30 @@ def handle_dtmf():
     """Handle DTMF (keypad) input from IVR menu - SIMPLIFIED FOR TESTING."""
     
     try:
-        # Handle both GET and POST requests
+        # LOG EVERYTHING - this will help us see if Vonage is even calling this webhook
+        print(f"\n" + "="*60)
+        print(f"DTMF WEBHOOK HIT!")
+        print(f"="*60)
+        print(f"Method: {request.method}")
+        print(f"URL: {request.url}")
+        print(f"Path: {request.path}")
+        
+        # Get request body
         if request.method == 'POST':
-            dtmf_data = request.get_json() or {}
+            print(f"Content-Type: {request.content_type}")
+            raw_data = request.get_data(as_text=True)
+            print(f"Raw body: {raw_data}")
+            
+            if request.is_json:
+                dtmf_data = request.get_json() or {}
+                print(f"Parsed JSON: {dtmf_data}")
+            else:
+                dtmf_data = request.form.to_dict() or {}
+                print(f"Parsed Form: {dtmf_data}")
         else:
             dtmf_data = request.args.to_dict()
+            print(f"Query params: {dtmf_data}")
         
-        print(f"\n===== DTMF WEBHOOK CALLED =====")
-        print(f"Method: {request.method}")
-        print(f"Full request data: {dtmf_data}")
         print(f"Headers: {dict(request.headers)}")
         
         conversation_uuid = dtmf_data.get('conversation_uuid', '')
