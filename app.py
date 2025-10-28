@@ -333,7 +333,7 @@ def handle_dtmf():
                         "language": "en-US",
                         "context": ["sports", "basketball", "booking", "rental", "party", "price", "availability"],
                         "startTimeout": 10,
-                        "maxDuration": 15
+                        "maxDuration": 60  # Increased to allow longer customer responses during booking
                     }
                 }
             ]
@@ -714,7 +714,7 @@ def create_department_greeting_ncco(menu_option):
                 "language": "en-US",
                 "context": ["sports", "basketball", "booking", "rental", "party", "price", "availability"],
                 "startTimeout": 10,
-                "maxDuration": 15
+                "maxDuration": 60  # Increased to allow longer customer responses during booking
             }
         }
     ]
@@ -762,7 +762,7 @@ def create_speech_input_ncco(text, context_state):
                 "language": "en-US",
                 "context": ["sports", "basketball", "booking", "rental", "party", "yes", "no"],
                 "startTimeout": 10,  # Increased to allow full message to complete
-                "maxDuration": 15  # Increased for longer user responses
+                "maxDuration": 60  # Increased to allow longer customer conversations during booking
             }
         }
     ]
@@ -813,8 +813,8 @@ def create_clarification_ncco():
                 "endOnSilence": 3,
                 "language": "en-US",
                 "context": ["pricing", "availability", "booking", "services", "hours"],
-                "startTimeout": 5,
-                "maxDuration": 10
+                "startTimeout": 10,
+                "maxDuration": 60  # Increased to allow longer customer responses
             }
         }
     ]
