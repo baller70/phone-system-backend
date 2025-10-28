@@ -222,10 +222,23 @@ def handle_dtmf():
         print(f"Headers: {dict(request.headers)}")
         
         conversation_uuid = dtmf_data.get('conversation_uuid', '')
-        dtmf = dtmf_data.get('dtmf', '')
-        timed_out = dtmf_data.get('timed_out', False)
         
-        print(f"Parsed - UUID: {conversation_uuid}, DTMF: '{dtmf}' (type: {type(dtmf)}), Timed out: {timed_out}")
+        # CRITICAL FIX: Vonage sends DTMF as nested object {"digits": "1", "timed_out": false}
+        # We need to extract the "digits" field, not treat the whole object as a string
+        dtmf_object = dtmf_data.get('dtmf', {})
+        
+        if isinstance(dtmf_object, dict):
+            # New format: {"digits": "1", "timed_out": false}
+            dtmf = dtmf_object.get('digits', '')
+            timed_out = dtmf_object.get('timed_out', False)
+            print(f"Parsed DTMF object - digits: '{dtmf}', timed_out: {timed_out}")
+        else:
+            # Old format: just a string "1"
+            dtmf = str(dtmf_object).strip()
+            timed_out = dtmf_data.get('timed_out', False)
+            print(f"Parsed DTMF string - value: '{dtmf}', timed_out: {timed_out}")
+        
+        print(f"Parsed - UUID: {conversation_uuid}, DTMF digits: '{dtmf}' (type: {type(dtmf)}), Timed out: {timed_out}")
         
         # Initialize session if it doesn't exist
         if conversation_uuid not in call_sessions:
@@ -243,7 +256,7 @@ def handle_dtmf():
             print("DTMF timed out or empty, replaying menu")
             return jsonify(create_ivr_menu_ncco(replay=True))
         
-        # Convert DTMF to string if needed
+        # Ensure DTMF is a clean string
         dtmf = str(dtmf).strip()
         print(f"Normalized DTMF: '{dtmf}'")
         
