@@ -758,7 +758,8 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'vonage_client': vonage_client is not None
+        'vonage_client': vonage_client is not None,
+        'version': '1.1-ivr-integrated'
     })
 
 if __name__ == '__main__':
