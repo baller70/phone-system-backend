@@ -857,6 +857,26 @@ def handle_dtmf():
             # Build NCCO for department greeting + name collection
             ncco = []
             
+            # START RECORDING NOW (after initial greeting already played)
+            # This ensures the initial greeting plays instantly, but the conversation is still recorded
+            ncco.append({
+                "action": "record",
+                "eventUrl": [f"{BASE_URL}/webhooks/recording"],
+                "eventMethod": "POST",
+                "format": "mp3",
+                "split": "conversation",
+                "channels": 2,
+                "endOnSilence": 3,
+                "endOnKey": "#",
+                "timeOut": 7200,
+                "beepStart": False,
+                "transcription": {
+                    "language": "en-US",
+                    "eventUrl": [f"{BASE_URL}/webhooks/transcription"],
+                    "eventMethod": "POST"
+                }
+            })
+            
             # Add department greeting (audio or TTS)
             department_greeting_text = option['greeting']
             if option.get('use_audio') and option.get('audio_url'):
@@ -1348,8 +1368,9 @@ def create_greeting_ncco():
 
 def create_greeting_ncco_with_recording(conversation_uuid):
     """
-    Create initial greeting NCCO with call recording enabled.
-    OPTIMIZED: Pre-build entire NCCO to avoid any construction delays.
+    Create initial greeting NCCO - greeting plays IMMEDIATELY.
+    Recording is NOT included here to avoid Vonage setup delays.
+    Recording will be started via the /webhooks/dtmf endpoint after DTMF is received.
     """
     # Get IVR settings from cache (instant)
     dashboard_settings = ivr_config.fetch_ivr_settings()
@@ -1362,34 +1383,17 @@ def create_greeting_ncco_with_recording(conversation_uuid):
         greeting_text = 'Welcome to Premier Sports. Press 1 for basketball, press 2 for parties, press 9 for AI assistant, or press 0 for operator.'
         voice_name = 'Amy'
     
-    # Build NCCO array (all actions in one go - no loops, no delays)
+    # Build NCCO array - NO RECORDING HERE (to avoid delay)
+    # Recording will be started after DTMF input
     ncco = [
-        # Action 1: Start recording (silent, no delay)
-        {
-            "action": "record",
-            "eventUrl": [f"{BASE_URL}/webhooks/recording"],
-            "eventMethod": "POST",
-            "format": "mp3",
-            "split": "conversation",
-            "channels": 2,
-            "endOnSilence": 3,
-            "endOnKey": "#",
-            "timeOut": 7200,
-            "beepStart": False,
-            "transcription": {
-                "language": "en-US",
-                "eventUrl": [f"{BASE_URL}/webhooks/transcription"],
-                "eventMethod": "POST"
-            }
-        },
-        # Action 2: Play greeting (INSTANT)
+        # Action 1: Play greeting IMMEDIATELY (no recording setup delay)
         {
             "action": "talk",
             "text": greeting_text,
             "voiceName": voice_name,
             "bargeIn": True
         },
-        # Action 3: Collect DTMF input
+        # Action 2: Collect DTMF input
         {
             "action": "input",
             "eventUrl": [f"{BASE_URL}/webhooks/dtmf"],
