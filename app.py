@@ -840,13 +840,16 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
         replay_msg = dashboard_settings.get('replayMessage', "I didn't catch that.")
         menu_options = dashboard_settings.get('menuOptions', [])
         
-        # Build menu text from options
+        # Build menu text from active options only
         menu_parts = []
         for option in menu_options:
-            menu_parts.append(option.get('optionText', ''))
+            if option.get('isActive', True):  # Only include active options
+                option_text = option.get('optionText', '').strip()
+                if option_text:  # Only add non-empty text
+                    menu_parts.append(option_text)
         menu_text = ' '.join(menu_parts)
         
-        print(f"✓ Using IVR settings from dashboard")
+        print(f"✓ Using IVR settings from dashboard with {len(menu_parts)} active options")
     else:
         # Fallback to static settings
         print(f"⚠ Using fallback IVR settings")
@@ -855,14 +858,16 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
         replay_msg = "I didn't catch that."
         menu_text = "Press 1 for basketball, press 2 for parties, press 9 for the AI assistant, or press 0 for an operator."
     
+    # For replay/invalid, skip the base greeting to avoid repetition
     if invalid:
-        greeting_text = invalid_msg + " "
+        greeting_text = invalid_msg + " " + menu_text
+        full_text = greeting_text
     elif replay:
-        greeting_text = replay_msg + " "
+        greeting_text = replay_msg + " " + menu_text
+        full_text = greeting_text
     else:
-        greeting_text = base_greeting + " "
-    
-    full_text = greeting_text + menu_text
+        # Only for initial greeting, include both base greeting and menu
+        full_text = base_greeting + " " + menu_text
     
     print(f"\n===== IVR MENU NCCO CREATED =====")
     print(f"Full text: {full_text}")
@@ -883,7 +888,7 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
             "eventUrl": [f"{BASE_URL}/webhooks/dtmf"],
             "type": ["dtmf"],
             "dtmf": {
-                "timeOut": 10,
+                "timeOut": 5,  # Reduced from 10 to 5 seconds for faster response
                 "maxDigits": 1,
                 "submitOnHash": False
             }
