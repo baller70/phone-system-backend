@@ -1602,6 +1602,16 @@ def health_check():
         'version': '1.1-ivr-integrated'
     })
 
+@app.route('/debug/clear-cache', methods=['POST'])
+def clear_ivr_cache():
+    """Clear the IVR settings cache to force a fresh fetch."""
+    try:
+        ivr_config._ivr_cache = {'settings': None, 'timestamp': 0}
+        print("[CACHE] IVR cache manually cleared")
+        return jsonify({'status': 'success', 'message': 'IVR cache cleared'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
 @app.route('/debug/ivr-settings', methods=['GET'])
 def debug_ivr_settings():
     """Debug endpoint to see what IVR settings the backend is using."""
