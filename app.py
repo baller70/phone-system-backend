@@ -1438,47 +1438,20 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
             }
         ]
     
-    # For initial greeting, try audio first but fall back to TTS if unavailable
-    ncco = []
-    audio_failed = False
+    # ALWAYS use TTS with full menu for now (audio will be fixed later)
+    # This ensures customers HEAR something instead of silence
+    full_text = base_greeting + " " + menu_text
     
-    if use_audio and audio_url:
-        # Try to construct audio URL
-        try:
-            full_audio_url = construct_audio_url(audio_url)
-            
-            # Only use audio if we got a valid URL
-            if full_audio_url and full_audio_url.startswith('http'):
-                print(f"\n===== IVR MENU NCCO (AUDIO) =====")
-                print(f"Streaming audio: {full_audio_url}")
-                print(f"==================================\n")
-                
-                ncco.append({
-                    "action": "stream",
-                    "streamUrl": [full_audio_url],
-                    "bargeIn": True  # Allow customer to interrupt
-                })
-            else:
-                print(f"⚠ Audio URL construction failed, falling back to TTS")
-                audio_failed = True
-        except Exception as e:
-            print(f"⚠ Error constructing audio URL: {e}, falling back to TTS")
-            audio_failed = True
+    print(f"\n===== IVR MENU NCCO (TTS) =====")
+    print(f"Text: {full_text}")
+    print(f"==================================\n")
     
-    # Use TTS if audio is not configured or failed
-    if not use_audio or not audio_url or audio_failed or len(ncco) == 0:
-        # Use text-to-speech
-        full_text = base_greeting
-        print(f"\n===== IVR MENU NCCO (TTS) =====")
-        print(f"Text: {full_text}")
-        print(f"==================================\n")
-        
-        ncco.append({
-            "action": "talk",
-            "text": full_text,
-            "voiceName": "Amy",
-            "bargeIn": True
-        })
+    ncco = [{
+        "action": "talk",
+        "text": full_text,
+        "voiceName": "Amy",
+        "bargeIn": True
+    }]
     
     # Add DTMF input
     ncco.append({
@@ -1497,49 +1470,20 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
 def create_department_greeting_ncco(menu_option):
     """Create department-specific greeting after menu selection."""
     greeting_text = menu_option.get('greeting', menu_option.get('departmentGreeting', ''))
-    use_audio = menu_option.get('useAudio', False)
-    audio_url = menu_option.get('audioUrl', None)
     
-    ncco = []
-    audio_failed = False
+    # ALWAYS use TTS for now (audio will be fixed later)
+    # This ensures customers HEAR something instead of silence
+    print(f"\n===== DEPARTMENT GREETING (TTS) =====")
+    print(f"Department: {menu_option.get('optionName')}")
+    print(f"Text: {greeting_text}")
+    print(f"==================================\n")
     
-    # Try audio if configured, otherwise use text-to-speech
-    if use_audio and audio_url:
-        try:
-            full_audio_url = construct_audio_url(audio_url)
-            
-            # Only use audio if we got a valid URL
-            if full_audio_url and full_audio_url.startswith('http'):
-                print(f"\n===== DEPARTMENT GREETING (AUDIO) =====")
-                print(f"Department: {menu_option.get('optionName')}")
-                print(f"Streaming audio: {full_audio_url}")
-                print(f"==================================\n")
-                
-                ncco.append({
-                    "action": "stream",
-                    "streamUrl": [full_audio_url],
-                    "bargeIn": True
-                })
-            else:
-                print(f"⚠ Audio URL construction failed for department, falling back to TTS")
-                audio_failed = True
-        except Exception as e:
-            print(f"⚠ Error constructing department audio URL: {e}, falling back to TTS")
-            audio_failed = True
-    
-    # Use TTS if audio is not configured or failed
-    if not use_audio or not audio_url or audio_failed or len(ncco) == 0:
-        print(f"\n===== DEPARTMENT GREETING (TTS) =====")
-        print(f"Department: {menu_option.get('optionName')}")
-        print(f"Text: {greeting_text}")
-        print(f"==================================\n")
-        
-        ncco.append({
-            "action": "talk",
-            "text": greeting_text,
-            "voiceName": "Amy",
-            "bargeIn": True
-        })
+    ncco = [{
+        "action": "talk",
+        "text": greeting_text,
+        "voiceName": "Amy",
+        "bargeIn": True
+    }]
     
     # Add speech input
     ncco.append({
