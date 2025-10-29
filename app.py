@@ -17,6 +17,7 @@ from escalation import EscalationHandler
 from knowledge_base import KnowledgeBase
 import ivr_config
 import database
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -185,6 +186,229 @@ last_dtmf_debug = {
     'matched': None
 }
 
+def add_to_conversation_history(session, role, message):
+    """Add a message to the conversation history for later email summary."""
+    if 'conversation_history' not in session:
+        session['conversation_history'] = []
+    
+    session['conversation_history'].append({
+        'timestamp': datetime.now().isoformat(),
+        'role': role,  # 'ai' or 'customer'
+        'message': message
+    })
+    
+    print(f"[CONVERSATION] Added {role} message: {message[:50]}...")
+
+def create_call_summary_html(session, call_details):
+    """Create a beautifully formatted HTML email for the call summary."""
+    
+    conversation_history = session.get('conversation_history', [])
+    customer_name = session.get('customer_name', 'Unknown')
+    customer_email = session.get('customer_email', 'Not provided')
+    department = session.get('department', 'Unknown')
+    from_number = call_details.get('from_number', 'Unknown')
+    duration = call_details.get('duration', 0)
+    outcome = session.get('outcome', 'completed')
+    booking_made = session.get('booking_id') is not None
+    
+    # Format duration
+    minutes = duration // 60
+    seconds = duration % 60
+    duration_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+    
+    # Format timestamp
+    start_time = session.get('start_time', datetime.now())
+    if isinstance(start_time, str):
+        start_time = datetime.fromisoformat(start_time)
+    timestamp_str = start_time.strftime("%B %d, %Y at %I:%M %p")
+    
+    # Build conversation HTML
+    conversation_html = ""
+    for msg in conversation_history:
+        role = msg['role']
+        message = msg['message']
+        timestamp = msg.get('timestamp', '')
+        
+        if role == 'ai':
+            conversation_html += f"""
+            <div style="margin-bottom: 20px; padding: 15px; background-color: #f0f7ff; border-left: 4px solid #2563eb; border-radius: 8px;">
+                <div style="font-weight: bold; color: #2563eb; margin-bottom: 5px;">🤖 AI Assistant</div>
+                <div style="color: #1e293b; line-height: 1.6;">{message}</div>
+            </div>
+            """
+        else:  # customer
+            conversation_html += f"""
+            <div style="margin-bottom: 20px; padding: 15px; background-color: #f0fdf4; border-left: 4px solid #16a34a; border-radius: 8px;">
+                <div style="font-weight: bold; color: #16a34a; margin-bottom: 5px;">👤 Customer</div>
+                <div style="color: #1e293b; line-height: 1.6;">{message}</div>
+            </div>
+            """
+    
+    if not conversation_html:
+        conversation_html = "<p style='color: #64748b; font-style: italic;'>No conversation recorded</p>"
+    
+    # Booking info section
+    booking_html = ""
+    if booking_made:
+        booking_id = session.get('booking_id', 'N/A')
+        booking_details = session.get('context', {}).get('proposed_booking', {})
+        service_type = booking_details.get('service_type', 'N/A')
+        date_time = booking_details.get('date_time', 'N/A')
+        total_cost = booking_details.get('total_cost', 'N/A')
+        
+        booking_html = f"""
+        <div style="margin: 30px 0; padding: 20px; background: linear-gradient(135deg, #16a34a 0%, #22c55e 100%); border-radius: 12px; color: white;">
+            <h3 style="margin: 0 0 15px 0; font-size: 18px;">✅ Booking Confirmed</h3>
+            <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 8px;">
+                <p style="margin: 5px 0;"><strong>Booking ID:</strong> {booking_id}</p>
+                <p style="margin: 5px 0;"><strong>Service:</strong> {service_type.replace('_', ' ').title()}</p>
+                <p style="margin: 5px 0;"><strong>Date/Time:</strong> {date_time}</p>
+                <p style="margin: 5px 0;"><strong>Total Cost:</strong> ${total_cost}</p>
+            </div>
+        </div>
+        """
+    
+    # Outcome badge
+    outcome_colors = {
+        'completed': ('#16a34a', '#f0fdf4', '✅'),
+        'booking_success': ('#16a34a', '#f0fdf4', '🎉'),
+        'booking_failed': ('#dc2626', '#fef2f2', '❌'),
+        'transferred': ('#f59e0b', '#fffbeb', '📞'),
+        'failed': ('#dc2626', '#fef2f2', '❌')
+    }
+    
+    outcome_color, outcome_bg, outcome_icon = outcome_colors.get(outcome, ('#64748b', '#f1f5f9', 'ℹ️'))
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Call Summary</title>
+    </head>
+    <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8fafc;">
+        <div style="max-width: 600px; margin: 40px auto; background: white; border-radius: 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); overflow: hidden;">
+            
+            <!-- Header -->
+            <div style="background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); padding: 30px; text-align: center; color: white;">
+                <h1 style="margin: 0; font-size: 28px; font-weight: bold;">📞 New Call Received</h1>
+                <p style="margin: 10px 0 0 0; font-size: 16px; opacity: 0.9;">{timestamp_str}</p>
+            </div>
+            
+            <!-- Call Details -->
+            <div style="padding: 30px;">
+                
+                <!-- Status Badge -->
+                <div style="text-align: center; margin-bottom: 30px;">
+                    <span style="display: inline-block; padding: 10px 20px; background-color: {outcome_bg}; color: {outcome_color}; border-radius: 20px; font-weight: bold; font-size: 14px;">
+                        {outcome_icon} {outcome.replace('_', ' ').title()}
+                    </span>
+                </div>
+                
+                <!-- Key Information -->
+                <div style="background: #f8fafc; padding: 20px; border-radius: 12px; margin-bottom: 30px;">
+                    <h2 style="margin: 0 0 15px 0; font-size: 18px; color: #1e293b;">📋 Call Information</h2>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                            <td style="padding: 8px 0; color: #64748b; font-weight: 500;">Caller Phone:</td>
+                            <td style="padding: 8px 0; color: #1e293b; font-weight: 600; text-align: right;">{from_number}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 8px 0; color: #64748b; font-weight: 500;">Customer Name:</td>
+                            <td style="padding: 8px 0; color: #1e293b; font-weight: 600; text-align: right;">{customer_name}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 8px 0; color: #64748b; font-weight: 500;">Email:</td>
+                            <td style="padding: 8px 0; color: #1e293b; font-weight: 600; text-align: right;">{customer_email}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 8px 0; color: #64748b; font-weight: 500;">Department:</td>
+                            <td style="padding: 8px 0; color: #1e293b; font-weight: 600; text-align: right;">{department.title()}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 8px 0; color: #64748b; font-weight: 500;">Call Duration:</td>
+                            <td style="padding: 8px 0; color: #1e293b; font-weight: 600; text-align: right;">{duration_str}</td>
+                        </tr>
+                    </table>
+                </div>
+                
+                {booking_html}
+                
+                <!-- Conversation Transcript -->
+                <div style="margin-top: 30px;">
+                    <h2 style="margin: 0 0 20px 0; font-size: 18px; color: #1e293b;">💬 Full Conversation</h2>
+                    {conversation_html}
+                </div>
+                
+            </div>
+            
+            <!-- Footer -->
+            <div style="background: #f8fafc; padding: 20px 30px; text-align: center; color: #64748b; font-size: 14px; border-top: 1px solid #e2e8f0;">
+                <p style="margin: 0;">This is an automated call summary from your Phone System Dashboard</p>
+                <p style="margin: 10px 0 0 0;">
+                    <a href="https://phone-system-dashboa-8em0c9.abacusai.app" style="color: #3b82f6; text-decoration: none; font-weight: 600;">
+                        View Full Dashboard →
+                    </a>
+                </p>
+            </div>
+            
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
+
+def send_call_summary_email(session, call_details):
+    """Send a call summary email using Resend API."""
+    try:
+        resend_api_key = os.getenv('RESEND_API_KEY')
+        owner_email = os.getenv('OWNER_EMAIL', 'notifications@phone-system-dashboa-8em0c9.abacusai.app')
+        email_from = os.getenv('EMAIL_FROM', 'onboarding@resend.dev')
+        
+        if not resend_api_key:
+            print("❌ RESEND_API_KEY not configured, skipping email")
+            return False
+        
+        # Create HTML email content
+        html_content = create_call_summary_html(session, call_details)
+        
+        # Prepare email
+        from_number = call_details.get('from_number', 'Unknown')
+        customer_name = session.get('customer_name', 'Unknown')
+        department = session.get('department', 'Unknown')
+        
+        subject = f"📞 New Call from {customer_name} ({from_number}) - {department.title()}"
+        
+        # Send via Resend API
+        response = requests.post(
+            'https://api.resend.com/emails',
+            headers={
+                'Authorization': f'Bearer {resend_api_key}',
+                'Content-Type': 'application/json'
+            },
+            json={
+                'from': email_from,
+                'to': [owner_email],
+                'subject': subject,
+                'html': html_content
+            }
+        )
+        
+        if response.status_code == 200:
+            print(f"✅ Call summary email sent successfully to {owner_email}")
+            return True
+        else:
+            print(f"❌ Failed to send email: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error sending call summary email: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 @app.route('/', methods=['GET'])
 def index():
     """Root endpoint for health checks."""
@@ -340,6 +564,9 @@ def handle_events():
             elif event_status in ['unanswered', 'failed', 'rejected', 'timeout']:
                 outcome = 'failed'
             
+            # Store outcome in session for email
+            session['outcome'] = outcome
+            
             # Get transcription/notes from session
             notes = None
             if 'conversation_history' in session:
@@ -375,6 +602,18 @@ def handle_events():
                     call_sessions[conversation_uuid]['call_log_id'] = call_log_id
             except Exception as log_error:
                 print(f"Warning: Failed to log call to dashboard: {log_error}")
+            
+            # Send call summary email (only for completed calls that lasted > 5 seconds)
+            if event_status == 'completed' and duration > 5 and session:
+                try:
+                    call_details = {
+                        'from_number': from_number,
+                        'duration': duration,
+                        'outcome': outcome
+                    }
+                    send_call_summary_email(session, call_details)
+                except Exception as email_error:
+                    print(f"Warning: Failed to send call summary email: {email_error}")
             
             # Clean up session after logging
             if conversation_uuid in call_sessions:
@@ -600,10 +839,15 @@ def handle_dtmf():
             session['selected_option'] = option['name']
             session['intent_type'] = option['intent']
             session['intent'] = option['intent']  # For logging consistency
+            session['department'] = option['name']  # Store department name for email
+            
+            # Track customer selection in conversation history
+            add_to_conversation_history(session, 'customer', f"Selected option {dtmf}: {option['name']}")
             
             # Handle operator transfer
             if dtmf == '0':
                 print("Transferring to operator...")
+                add_to_conversation_history(session, 'ai', "Transferring you to a live operator...")
                 return jsonify(create_transfer_ncco())
             
             # Set context
@@ -614,6 +858,7 @@ def handle_dtmf():
             ncco = []
             
             # Add department greeting (audio or TTS)
+            department_greeting_text = option['greeting']
             if option.get('use_audio') and option.get('audio_url'):
                 # Use audio file
                 audio_url = construct_audio_url(option['audio_url'])
@@ -623,20 +868,23 @@ def handle_dtmf():
                     "streamUrl": [audio_url],
                     "bargeIn": True
                 })
+                # Track with original greeting text
+                add_to_conversation_history(session, 'ai', department_greeting_text)
             else:
                 # Use text-to-speech
-                department_greeting = option['greeting']
-                print(f"Speaking department greeting: {department_greeting}")
+                print(f"Speaking department greeting: {department_greeting_text}")
                 ncco.append({
                     "action": "talk",
-                    "text": department_greeting,
+                    "text": department_greeting_text,
                     "voiceName": "Amy",
                     "bargeIn": True
                 })
+                add_to_conversation_history(session, 'ai', department_greeting_text)
             
             # Ask for customer name
             name_request = "Before we begin, may I have your name please?"
             print(f"Asking for name: {name_request}")
+            add_to_conversation_history(session, 'ai', name_request)
             
             ncco.extend([
                 {
@@ -756,6 +1004,9 @@ def handle_speech():
         # Store the speech text for knowledge base queries
         session['last_speech'] = speech_text
         
+        # Track customer's speech input in conversation history
+        add_to_conversation_history(session, 'customer', speech_text)
+        
         # Process speech with NLU
         nlu_result = nlu.process_speech_input(speech_text, session['context'])
         
@@ -794,6 +1045,9 @@ def handle_intent(nlu_result, session):
         response_text = f"Thank you! And what's your email address?"
         print(f"Collected name: {session['customer_name']}, asking for email")
         
+        # Track AI response
+        add_to_conversation_history(session, 'ai', response_text)
+        
         return [
             {
                 "action": "talk",
@@ -826,6 +1080,9 @@ def handle_intent(nlu_result, session):
         customer_name = session.get('customer_name', 'there')
         response_text = f"Perfect! Thanks {customer_name}. How may I help you today?"
         print(f"Collected email: {session['customer_email']}, ready for conversation")
+        
+        # Track AI response
+        add_to_conversation_history(session, 'ai', response_text)
         
         return [
             {
@@ -866,6 +1123,7 @@ def handle_intent(nlu_result, session):
             # User said no
             response_text = "No problem! Would you like to try a different date or time?"
             session['context'].pop('proposed_booking', None)
+            add_to_conversation_history(session, 'ai', response_text)
             return create_speech_input_ncco(response_text, 'booking_restart')
         else:
             # Didn't understand, ask again
@@ -873,6 +1131,7 @@ def handle_intent(nlu_result, session):
                 booking = session['context']['proposed_booking']
                 response_text = f"Just to confirm, would you like me to book {booking['service_type'].replace('_', ' ')} for {booking['date_time']} at ${booking['total_cost']}? Please say yes or no."
                 response_text = format_price_for_speech(response_text)
+                add_to_conversation_history(session, 'ai', response_text)
                 return create_speech_input_ncco(response_text, 'booking_confirmation')
     
     # Handle primary intents
@@ -906,6 +1165,9 @@ def handle_pricing_inquiry(entities, session):
     
     response_text = f"For {service_type} rentals, our pricing is as follows: {description}. Would you like to check availability or make a booking?"
     
+    # Track AI response
+    add_to_conversation_history(session, 'ai', response_text)
+    
     return create_speech_input_ncco(response_text, 'pricing_followup')
 
 def handle_availability_inquiry(entities, session):
@@ -915,6 +1177,7 @@ def handle_availability_inquiry(entities, session):
     
     if not date_time:
         response_text = "I'd be happy to check availability for you. What date and time are you looking for?"
+        add_to_conversation_history(session, 'ai', response_text)
         return create_speech_input_ncco(response_text, 'availability_date_needed')
     
     # Check calendar availability
@@ -928,6 +1191,7 @@ def handle_availability_inquiry(entities, session):
             'service_type': service_type,
             'rate': availability['rate']
         }
+        add_to_conversation_history(session, 'ai', response_text)
         return create_speech_input_ncco(response_text, 'booking_confirmation')
     else:
         alternative_times = availability.get('alternatives', [])
@@ -937,6 +1201,7 @@ def handle_availability_inquiry(entities, session):
         else:
             response_text = "I'm sorry, that time slot isn't available. Would you like me to check a different date or time?"
         
+        add_to_conversation_history(session, 'ai', response_text)
         return create_speech_input_ncco(response_text, 'availability_alternatives')
 
 def handle_booking_request(entities, session):
@@ -969,14 +1234,17 @@ def handle_booking_request(entities, session):
             # Track successful booking
             session['outcome'] = 'booking_success'
             session['intent'] = 'booking'
+            session['booking_id'] = booking_result['booking_id']  # Store booking ID for email
             response_text = f"Perfect! I've reserved {booking_details['service_type'].replace('_', ' ')} for {booking_details['date_time']} at ${booking_details['rate']} per hour. Your booking confirmation is {booking_result['booking_id']}. You'll receive a confirmation text shortly. Is there anything else I can help you with?"
             response_text = format_price_for_speech(response_text)
+            add_to_conversation_history(session, 'ai', response_text)
             return create_speech_input_ncco(response_text, 'booking_complete')
         else:
             # Track failed booking
             session['outcome'] = 'booking_failed'
             session['intent'] = 'booking'
             response_text = "I'm sorry, there was an issue creating your booking. Let me transfer you to our staff for assistance."
+            add_to_conversation_history(session, 'ai', response_text)
             return escalation_handler.create_escalation_ncco('booking_error', entities)
     
     # Check if we have both service type and date/time
@@ -1004,6 +1272,7 @@ def handle_booking_request(entities, session):
             response_text = f"Great! I can book a {service_type.replace('_', ' ')} court for {date_time} at ${availability['rate']} per hour for {duration} hour(s). That's a total of ${availability['total_cost']}. Shall I go ahead and reserve that for you?"
             response_text = format_price_for_speech(response_text)
             session['state'] = 'booking_confirmation'
+            add_to_conversation_history(session, 'ai', response_text)
             return create_speech_input_ncco(response_text, 'booking_confirmation')
         else:
             reason = availability.get('reason', 'not available')
@@ -1014,25 +1283,30 @@ def handle_booking_request(entities, session):
                 response_text += f"I have availability on {alternatives[0]}. Would that work for you?"
             else:
                 response_text = "Let me transfer you to our staff to find an available time."
+                add_to_conversation_history(session, 'ai', response_text)
                 return escalation_handler.create_escalation_ncco('no_availability', entities)
             
+            add_to_conversation_history(session, 'ai', response_text)
             return create_speech_input_ncco(response_text, 'booking_alternative')
     
     # Missing information - ask for what we need
     if not service_type:
         response_text = "I'd be happy to help you make a booking. What type of activity are you planning - basketball, multi-sport, or a birthday party?"
         session['state'] = 'need_service_type'
+        add_to_conversation_history(session, 'ai', response_text)
         return create_speech_input_ncco(response_text, 'need_service_type')
     elif not date_time:
         response_text = f"Perfect! For {service_type.replace('_', ' ')}, what date and time work best for you?"
         # Store service type in context
         session['context']['service_type'] = service_type
         session['state'] = 'need_date_time'
+        add_to_conversation_history(session, 'ai', response_text)
         return create_speech_input_ncco(response_text, 'need_date_time')
     else:
         # Shouldn't reach here, but just in case
         response_text = "I'd be happy to help you make a booking. What type of activity and what date/time would you like?"
         session['state'] = 'booking_details_needed'
+        add_to_conversation_history(session, 'ai', response_text)
         return create_speech_input_ncco(response_text, 'booking_details_needed')
 
 def handle_general_info(entities, session):
@@ -1062,6 +1336,9 @@ def handle_general_info(entities, session):
     
     # Add follow-up prompt
     response_text += " Is there anything else you'd like to know?"
+    
+    # Track AI response
+    add_to_conversation_history(session, 'ai', response_text)
     
     return create_speech_input_ncco(response_text, 'general_followup')
 
