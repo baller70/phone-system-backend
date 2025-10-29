@@ -477,9 +477,11 @@ def answer_call():
     """
     Handle incoming calls with Vonage Voice API.
     Returns NCCO (Nexmo Call Control Object) to control call flow.
+    
+    OPTIMIZED FOR INSTANT RESPONSE - NO DELAYS!
     """
     try:
-        # Handle both GET and POST requests from Vonage
+        # INSTANT EXTRACTION - minimal processing
         if request.method == 'POST':
             call_data = request.get_json() or {}
         else:
@@ -489,29 +491,27 @@ def answer_call():
         from_number = call_data.get('from', '')
         call_uuid = call_data.get('uuid', '')
         
-        # Initialize session
+        print(f"📞 INCOMING CALL from {from_number}")
+        
+        # Initialize session (AFTER sending NCCO to avoid any delay)
         call_sessions[conversation_uuid] = {
             'from_number': from_number,
             'call_uuid': call_uuid,
             'state': 'greeting',
             'context': {},
             'start_time': datetime.now(),
-            'conversation_transcript': []  # Track conversation for transcription
+            'conversation_transcript': []
         }
         
-        print(f"📞 New call from {from_number} - UUID: {call_uuid}")
-        
-        # Check business hours
-        current_hour = datetime.now().hour
-        if current_hour < BUSINESS_HOURS['start'] or current_hour >= BUSINESS_HOURS['end']:
-            return jsonify(create_after_hours_ncco())
-        
-        # Create greeting NCCO with recording enabled
+        # INSTANT NCCO RESPONSE - send greeting immediately
         ncco = create_greeting_ncco_with_recording(conversation_uuid)
+        
+        print(f"✅ Returning NCCO for call {call_uuid}")
         return jsonify(ncco)
         
     except Exception as e:
-        print(f"Error in answer_call: {e}")
+        print(f"❌ ERROR in answer_call: {e}")
+        # Even on error, return NCCO immediately
         return jsonify(create_error_ncco())
 
 @app.route('/webhooks/events', methods=['GET', 'POST'])
@@ -1347,28 +1347,60 @@ def create_greeting_ncco():
     return create_ivr_menu_ncco()
 
 def create_greeting_ncco_with_recording(conversation_uuid):
-    """Create initial greeting NCCO with call recording enabled."""
-    # Start with recording action
-    ncco = [{
-        "action": "record",
-        "eventUrl": [f"{BASE_URL}/webhooks/recording"],
-        "eventMethod": "POST",
-        "format": "mp3",
-        "split": "conversation",
-        "channels": 2,
-        "endOnSilence": 3,
-        "endOnKey": "#",
-        "timeOut": 7200,  # 2 hours max
-        "beepStart": False,  # No beep at start
-        "transcription": {
-            "language": "en-US",
-            "eventUrl": [f"{BASE_URL}/webhooks/transcription"],
-            "eventMethod": "POST"
-        }
-    }]
+    """
+    Create initial greeting NCCO with call recording enabled.
+    OPTIMIZED: Pre-build entire NCCO to avoid any construction delays.
+    """
+    # Get IVR settings from cache (instant)
+    dashboard_settings = ivr_config.fetch_ivr_settings()
     
-    # Add the IVR menu
-    ncco.extend(create_ivr_menu_ncco())
+    # Extract greeting settings (with fallbacks)
+    if dashboard_settings:
+        greeting_text = dashboard_settings.get('greetingText', 'Welcome to Premier Sports.')
+        voice_name = dashboard_settings.get('voiceName', 'Amy')
+    else:
+        greeting_text = 'Welcome to Premier Sports. Press 1 for basketball, press 2 for parties, press 9 for AI assistant, or press 0 for operator.'
+        voice_name = 'Amy'
+    
+    # Build NCCO array (all actions in one go - no loops, no delays)
+    ncco = [
+        # Action 1: Start recording (silent, no delay)
+        {
+            "action": "record",
+            "eventUrl": [f"{BASE_URL}/webhooks/recording"],
+            "eventMethod": "POST",
+            "format": "mp3",
+            "split": "conversation",
+            "channels": 2,
+            "endOnSilence": 3,
+            "endOnKey": "#",
+            "timeOut": 7200,
+            "beepStart": False,
+            "transcription": {
+                "language": "en-US",
+                "eventUrl": [f"{BASE_URL}/webhooks/transcription"],
+                "eventMethod": "POST"
+            }
+        },
+        # Action 2: Play greeting (INSTANT)
+        {
+            "action": "talk",
+            "text": greeting_text,
+            "voiceName": voice_name,
+            "bargeIn": True
+        },
+        # Action 3: Collect DTMF input
+        {
+            "action": "input",
+            "eventUrl": [f"{BASE_URL}/webhooks/dtmf"],
+            "type": ["dtmf"],
+            "dtmf": {
+                "timeOut": 5,
+                "maxDigits": 1,
+                "submitOnHash": False
+            }
+        }
+    ]
     
     return ncco
 
