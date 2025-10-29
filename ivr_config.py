@@ -15,12 +15,51 @@ logger = logging.getLogger(__name__)
 DASHBOARD_URL = os.environ.get('DASHBOARD_URL', 'https://phone-system-dashboa-8em0c9.abacusai.app')
 
 # Cache for IVR settings (optional, to reduce API calls)
+# Pre-populate with defaults so first call is instant
 _ivr_cache = {
-    'settings': None,
+    'settings': None,  # Will be pre-warmed on startup
     'timestamp': 0
 }
 
 CACHE_TTL = 300  # Cache for 5 minutes
+
+def _prewarm_cache():
+    """Pre-warm the cache with IVR settings on startup to avoid first-call delay."""
+    try:
+        import time
+        url = f"{DASHBOARD_URL}/api/public/ivr-settings"
+        print(f"[IVR CONFIG] Pre-warming cache from {url}")
+        
+        headers = {}
+        api_key = os.environ.get('BACKEND_API_KEY')
+        if api_key:
+            headers['x-api-key'] = api_key
+        
+        # Short timeout for pre-warming (don't block startup)
+        response = requests.get(url, headers=headers, timeout=1)
+        
+        if response.status_code == 200:
+            settings = response.json()
+            _ivr_cache['settings'] = settings
+            _ivr_cache['timestamp'] = time.time()
+            print(f"[IVR CONFIG] ✓ Cache pre-warmed with {len(settings.get('menuOptions', []))} menu options")
+        else:
+            print(f"[IVR CONFIG] Pre-warm failed with HTTP {response.status_code}, will use defaults")
+    except Exception as e:
+        print(f"[IVR CONFIG] Pre-warm failed: {e}, will use defaults")
+
+# Pre-warm cache on module import
+try:
+    _prewarm_cache()
+except:
+    pass  # Silently fail, will use defaults below
+
+# If pre-warming failed, ensure cache has defaults to prevent first-call delay
+if not _ivr_cache.get('settings'):
+    import time
+    # Note: We don't call get_default_ivr_settings() here to avoid circular import
+    # The fetch function will handle defaults if needed
+    print("[IVR CONFIG] Cache will use defaults on first call if needed")
 
 def fetch_ivr_settings() -> Optional[Dict]:
     """
@@ -31,10 +70,16 @@ def fetch_ivr_settings() -> Optional[Dict]:
         # Check cache first
         import time
         current_time = time.time()
-        if _ivr_cache['settings'] and (current_time - _ivr_cache['timestamp']) < CACHE_TTL:
-            print(f"[IVR CONFIG] Using cached IVR settings (age: {int(current_time - _ivr_cache['timestamp'])}s)")
-            logger.info("Using cached IVR settings")
-            return _ivr_cache['settings']
+        
+        # Use cache if available (even if expired - stale cache better than delay)
+        if _ivr_cache['settings']:
+            cache_age = int(current_time - _ivr_cache['timestamp'])
+            if cache_age < CACHE_TTL:
+                print(f"[IVR CONFIG] Using fresh cached IVR settings (age: {cache_age}s)")
+                logger.info("Using fresh cached IVR settings")
+                return _ivr_cache['settings']
+            else:
+                print(f"[IVR CONFIG] Cache expired ({cache_age}s old), but will use if fetch fails")
         
         # Fetch from API (using public endpoint)
         url = f"{DASHBOARD_URL}/api/public/ivr-settings"
@@ -47,8 +92,9 @@ def fetch_ivr_settings() -> Optional[Dict]:
         if api_key:
             headers['x-api-key'] = api_key
         
-        # REDUCED TIMEOUT: 2 seconds instead of 5 to avoid blocking
-        response = requests.get(url, headers=headers, timeout=2)
+        # ULTRA-SHORT TIMEOUT: 0.5 seconds to avoid call delays
+        # If it takes longer, we'll use cached or default settings
+        response = requests.get(url, headers=headers, timeout=0.5)
         
         if response.status_code == 200:
             settings = response.json()
@@ -64,15 +110,30 @@ def fetch_ivr_settings() -> Optional[Dict]:
         else:
             print(f"[IVR CONFIG] ✗ Failed to fetch IVR settings: HTTP {response.status_code}")
             logger.error(f"Failed to fetch IVR settings: {response.status_code}")
+            
+            # Return stale cache if available
+            if _ivr_cache['settings']:
+                print(f"[IVR CONFIG] Using stale cache due to fetch failure")
+                return _ivr_cache['settings']
             return None
             
     except requests.exceptions.Timeout as e:
-        print(f"[IVR CONFIG] ✗ Dashboard API timeout after 2s: {str(e)}")
+        print(f"[IVR CONFIG] ✗ Dashboard API timeout after 0.5s: {str(e)}")
         logger.error(f"Dashboard API timeout: {str(e)}")
+        
+        # Return stale cache if available (better than nothing)
+        if _ivr_cache['settings']:
+            print(f"[IVR CONFIG] Using stale cache due to timeout")
+            return _ivr_cache['settings']
         return None
     except Exception as e:
         print(f"[IVR CONFIG] ✗ Error fetching IVR settings: {str(e)}")
         logger.error(f"Error fetching IVR settings: {str(e)}")
+        
+        # Return stale cache if available
+        if _ivr_cache['settings']:
+            print(f"[IVR CONFIG] Using stale cache due to error")
+            return _ivr_cache['settings']
         return None
 
 
