@@ -1380,31 +1380,40 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
     
     if dashboard_settings:
         # Use dashboard settings
-        # The greetingText from dashboard ALREADY contains the full greeting + all menu options
-        full_greeting = dashboard_settings.get('greetingText', 'Welcome to Premier Sports.')
+        base_greeting = dashboard_settings.get('greetingText', 'Welcome to Premier Sports.')
         invalid_msg = dashboard_settings.get('invalidOptionMessage', "Sorry, invalid option.")
         replay_msg = dashboard_settings.get('replayMessage', "I didn't catch that.")
         menu_options = dashboard_settings.get('menuOptions', [])
         use_audio = dashboard_settings.get('useAudioGreeting', False)
         audio_url = dashboard_settings.get('greetingAudioUrl', None)
         
-        print(f"✓ Using IVR settings from dashboard with {len(menu_options)} menu options")
+        # Build menu text from active options only
+        menu_parts = []
+        for option in menu_options:
+            if option.get('isActive', True):  # Only include active options
+                option_text = option.get('optionText', '').strip()
+                if option_text:  # Only add non-empty text
+                    menu_parts.append(option_text)
+        menu_text = ' '.join(menu_parts)
+        
+        print(f"✓ Using IVR settings from dashboard with {len(menu_parts)} active options")
         print(f"  Use audio: {use_audio}, Audio URL: {audio_url}")
     else:
         # Fallback to static settings
         print(f"⚠ Using fallback IVR settings")
-        full_greeting = "Welcome to Premier Sports. Press 1 for basketball, press 2 for parties, press 9 for the AI assistant, or press 0 for an operator."
+        base_greeting = "Welcome to Premier Sports."
         invalid_msg = "Sorry, invalid option."
         replay_msg = "I didn't catch that."
+        menu_text = "Press 1 for basketball, press 2 for parties, press 9 for the AI assistant, or press 0 for an operator."
         use_audio = False
         audio_url = None
     
     # For replay/invalid, always use TTS (no audio for error messages)
     if invalid or replay:
         if invalid:
-            full_text = invalid_msg + " " + full_greeting
+            full_text = invalid_msg + " " + menu_text
         else:
-            full_text = replay_msg + " " + full_greeting
+            full_text = replay_msg + " " + menu_text
         
         print(f"\n===== IVR MENU NCCO (REPLAY/INVALID) =====")
         print(f"Text: {full_text}")
@@ -1429,9 +1438,9 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
             }
         ]
     
-    # Use the full greeting from dashboard (already includes all options)
-    # No need to append anything!
-    full_text = full_greeting
+    # ALWAYS use TTS with full menu for now (audio will be fixed later)
+    # This ensures customers HEAR something instead of silence
+    full_text = base_greeting + " " + menu_text
     
     print(f"\n===== IVR MENU NCCO (TTS) =====")
     print(f"Text: {full_text}")
