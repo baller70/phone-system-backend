@@ -127,6 +127,30 @@ def format_price_for_speech(text):
     print(f"[PRICE FORMAT] Converted: {text}")
     return text
 
+def construct_audio_url(audio_path):
+    """
+    Construct full S3 URL from audio path.
+    Example: "5974/ivr-audio/main-greeting.mp3" -> 
+    "https://abacusai-apps-c20303f21c19131e5ce80575-us-west-2.s3.amazonaws.com/5974/ivr-audio/main-greeting.mp3"
+    """
+    if not audio_path:
+        return None
+    
+    # If already a full URL, return as is
+    if audio_path.startswith('http://') or audio_path.startswith('https://'):
+        return audio_path
+    
+    # Construct S3 URL
+    bucket_name = os.getenv('AWS_BUCKET_NAME', 'abacusai-apps-c20303f21c19131e5ce80575-us-west-2')
+    region = 'us-west-2'  # Default region
+    
+    # Remove leading slash if present
+    audio_path = audio_path.lstrip('/')
+    
+    audio_url = f"https://{bucket_name}.s3.{region}.amazonaws.com/{audio_path}"
+    print(f"[AUDIO] Constructed audio URL: {audio_url}")
+    return audio_url
+
 # Debug storage for last DTMF input
 last_dtmf_debug = {
     'timestamp': None,
@@ -493,7 +517,9 @@ def handle_dtmf():
                     'greeting': option['departmentGreeting'],
                     'intent': option['intentType'],
                     'action_type': option.get('actionType', 'ai_conversation'),
-                    'transfer_number': option.get('transferNumber')
+                    'transfer_number': option.get('transferNumber'),
+                    'use_audio': option.get('useAudio', False),
+                    'audio_url': option.get('audioUrl', None)
                 }
             print(f"✓ Using menu options from dashboard: {list(MENU.keys())}")
         else:
@@ -504,25 +530,33 @@ def handle_dtmf():
                     'name': 'Basketball',
                     'greeting': 'Great! I can help you book a basketball court. What date and time would you like?',
                     'intent': 'basketball_rental',
-                    'action_type': 'ai_conversation'
+                    'action_type': 'ai_conversation',
+                    'use_audio': False,
+                    'audio_url': None
                 },
                 '2': {
                     'name': 'Parties',
                     'greeting': 'Perfect! Let me help you plan a birthday party. How many guests are you expecting?',
                     'intent': 'party_booking',
-                    'action_type': 'ai_conversation'
+                    'action_type': 'ai_conversation',
+                    'use_audio': False,
+                    'audio_url': None
                 },
                 '9': {
                     'name': 'AI Assistant',
                     'greeting': "Hi! I'm your AI assistant. How can I help you today?",
                     'intent': 'general_inquiry',
-                    'action_type': 'ai_conversation'
+                    'action_type': 'ai_conversation',
+                    'use_audio': False,
+                    'audio_url': None
                 },
                 '0': {
                     'name': 'Operator',
                     'greeting': None,  # Will transfer
                     'intent': 'transfer',
-                    'action_type': 'transfer'
+                    'action_type': 'transfer',
+                    'use_audio': False,
+                    'audio_url': None
                 }
             }
         
@@ -550,17 +584,38 @@ def handle_dtmf():
             session['context']['service_type'] = option['intent']
             session['state'] = 'collect_name'  # Start with name collection
             
-            # Return department greeting and ask for name
-            department_greeting = option['greeting']
+            # Build NCCO for department greeting + name collection
+            ncco = []
+            
+            # Add department greeting (audio or TTS)
+            if option.get('use_audio') and option.get('audio_url'):
+                # Use audio file
+                audio_url = construct_audio_url(option['audio_url'])
+                print(f"Playing department audio: {audio_url}")
+                ncco.append({
+                    "action": "stream",
+                    "streamUrl": [audio_url],
+                    "bargeIn": True
+                })
+            else:
+                # Use text-to-speech
+                department_greeting = option['greeting']
+                print(f"Speaking department greeting: {department_greeting}")
+                ncco.append({
+                    "action": "talk",
+                    "text": department_greeting,
+                    "voiceName": "Amy",
+                    "bargeIn": True
+                })
+            
+            # Ask for customer name
             name_request = "Before we begin, may I have your name please?"
-            full_greeting = f"{department_greeting} {name_request}"
+            print(f"Asking for name: {name_request}")
             
-            print(f"Returning greeting with name request: {full_greeting}")
-            
-            ncco = [
+            ncco.extend([
                 {
                     "action": "talk",
-                    "text": full_greeting,
+                    "text": name_request,
                     "voiceName": "Amy",
                     "bargeIn": True
                 },
@@ -576,7 +631,7 @@ def handle_dtmf():
                         "maxDuration": 10  # Short duration for name
                     }
                 }
-            ]
+            ])
             
             print(f"NCCO to return: {json.dumps(ncco, indent=2)}")
             print(f"===============================\n")
@@ -1026,6 +1081,8 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
         invalid_msg = dashboard_settings.get('invalidOptionMessage', "Sorry, invalid option.")
         replay_msg = dashboard_settings.get('replayMessage', "I didn't catch that.")
         menu_options = dashboard_settings.get('menuOptions', [])
+        use_audio = dashboard_settings.get('useAudioGreeting', False)
+        audio_url = dashboard_settings.get('greetingAudioUrl', None)
         
         # Build menu text from active options only
         menu_parts = []
@@ -1037,6 +1094,7 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
         menu_text = ' '.join(menu_parts)
         
         print(f"✓ Using IVR settings from dashboard with {len(menu_parts)} active options")
+        print(f"  Use audio: {use_audio}, Audio URL: {audio_url}")
     else:
         # Fallback to static settings
         print(f"⚠ Using fallback IVR settings")
@@ -1044,43 +1102,81 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
         invalid_msg = "Sorry, invalid option."
         replay_msg = "I didn't catch that."
         menu_text = "Press 1 for basketball, press 2 for parties, press 9 for the AI assistant, or press 0 for an operator."
+        use_audio = False
+        audio_url = None
     
-    # For replay/invalid, skip the base greeting to avoid repetition
-    if invalid:
-        greeting_text = invalid_msg + " " + menu_text
-        full_text = greeting_text
-    elif replay:
-        greeting_text = replay_msg + " " + menu_text
-        full_text = greeting_text
+    # For replay/invalid, always use TTS (no audio for error messages)
+    if invalid or replay:
+        if invalid:
+            full_text = invalid_msg + " " + menu_text
+        else:
+            full_text = replay_msg + " " + menu_text
+        
+        print(f"\n===== IVR MENU NCCO (REPLAY/INVALID) =====")
+        print(f"Text: {full_text}")
+        print(f"==================================\n")
+        
+        return [
+            {
+                "action": "talk",
+                "text": full_text,
+                "voiceName": "Amy",
+                "bargeIn": True
+            },
+            {
+                "action": "input",
+                "eventUrl": [f"{BASE_URL}/webhooks/dtmf"],
+                "type": ["dtmf"],
+                "dtmf": {
+                    "timeOut": 5,
+                    "maxDigits": 1,
+                    "submitOnHash": False
+                }
+            }
+        ]
+    
+    # For initial greeting, use audio if configured
+    ncco = []
+    
+    if use_audio and audio_url:
+        # Use audio file
+        full_audio_url = construct_audio_url(audio_url)
+        print(f"\n===== IVR MENU NCCO (AUDIO) =====")
+        print(f"Streaming audio: {full_audio_url}")
+        print(f"==================================\n")
+        
+        ncco.append({
+            "action": "stream",
+            "streamUrl": [full_audio_url],
+            "bargeIn": True  # Allow customer to interrupt
+        })
     else:
-        # Only for initial greeting, include both base greeting and menu
+        # Use text-to-speech
         full_text = base_greeting + " " + menu_text
-    
-    print(f"\n===== IVR MENU NCCO CREATED =====")
-    print(f"Full text: {full_text}")
-    print(f"DTMF webhook URL: {BASE_URL}/webhooks/dtmf")
-    print(f"==================================\n")
-    
-    # Return NCCO with talk and input actions
-    # IMPORTANT: Enable barge-in so customers can press buttons during menu playback
-    return [
-        {
+        print(f"\n===== IVR MENU NCCO (TTS) =====")
+        print(f"Text: {full_text}")
+        print(f"==================================\n")
+        
+        ncco.append({
             "action": "talk",
             "text": full_text,
             "voiceName": "Amy",
-            "bargeIn": True  # Allow customer to interrupt by pressing a button
-        },
-        {
-            "action": "input",
-            "eventUrl": [f"{BASE_URL}/webhooks/dtmf"],
-            "type": ["dtmf"],
-            "dtmf": {
-                "timeOut": 5,  # Reduced from 10 to 5 seconds for faster response
-                "maxDigits": 1,
-                "submitOnHash": False
-            }
+            "bargeIn": True
+        })
+    
+    # Add DTMF input
+    ncco.append({
+        "action": "input",
+        "eventUrl": [f"{BASE_URL}/webhooks/dtmf"],
+        "type": ["dtmf"],
+        "dtmf": {
+            "timeOut": 5,
+            "maxDigits": 1,
+            "submitOnHash": False
         }
-    ]
+    })
+    
+    return ncco
 
 def create_department_greeting_ncco(menu_option):
     """Create department-specific greeting after menu selection."""
