@@ -129,9 +129,9 @@ def format_price_for_speech(text):
 
 def construct_audio_url(audio_path):
     """
-    Construct full S3 URL from audio path.
-    Example: "5974/ivr-audio/main-greeting.mp3" -> 
-    "https://abacusai-apps-c20303f21c19131e5ce80575-us-west-2.s3.amazonaws.com/5974/ivr-audio/main-greeting.mp3"
+    Generate a pre-signed S3 URL for audio files.
+    The S3 bucket is private, so we need signed URLs for Vonage to access them.
+    We use a 7-day expiration to ensure the URL works for IVR playback.
     """
     if not audio_path:
         return None
@@ -140,16 +140,42 @@ def construct_audio_url(audio_path):
     if audio_path.startswith('http://') or audio_path.startswith('https://'):
         return audio_path
     
-    # Construct S3 URL
-    bucket_name = os.getenv('AWS_BUCKET_NAME', 'abacusai-apps-c20303f21c19131e5ce80575-us-west-2')
-    region = 'us-west-2'  # Default region
-    
-    # Remove leading slash if present
-    audio_path = audio_path.lstrip('/')
-    
-    audio_url = f"https://{bucket_name}.s3.{region}.amazonaws.com/{audio_path}"
-    print(f"[AUDIO] Constructed audio URL: {audio_url}")
-    return audio_url
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+        
+        bucket_name = os.getenv('AWS_BUCKET_NAME', 'abacusai-apps-c20303f21c19131e5ce80575-us-west-2')
+        region = 'us-west-2'  # Default region
+        
+        # Remove leading slash if present
+        audio_path = audio_path.lstrip('/')
+        
+        # Create S3 client
+        s3_client = boto3.client('s3', region_name=region)
+        
+        # Generate pre-signed URL with 7-day expiration (604800 seconds)
+        # This is long enough for IVR audio files that are frequently accessed
+        audio_url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={
+                'Bucket': bucket_name,
+                'Key': audio_path
+            },
+            ExpiresIn=604800  # 7 days
+        )
+        
+        print(f"[AUDIO] Generated signed URL for: {audio_path} (expires in 7 days)")
+        return audio_url
+        
+    except ClientError as e:
+        print(f"[AUDIO ERROR] Failed to generate signed URL: {e}")
+        # Fallback to direct S3 URL (will fail if bucket is private, but good for debugging)
+        audio_url = f"https://{bucket_name}.s3.{region}.amazonaws.com/{audio_path}"
+        print(f"[AUDIO] Falling back to direct URL: {audio_url}")
+        return audio_url
+    except Exception as e:
+        print(f"[AUDIO ERROR] Unexpected error: {e}")
+        return None
 
 # Debug storage for last DTMF input
 last_dtmf_debug = {
