@@ -512,12 +512,10 @@ def answer_call():
             'conversation_transcript': []
         }
         
-        # INSTANT NCCO RESPONSE - send FULL IVR MENU immediately
-        # Changed from create_greeting_ncco_with_recording() to create_ivr_menu_ncco()
-        # This ensures the full menu with all options plays immediately on answer
-        ncco = create_ivr_menu_ncco()
+        # INSTANT NCCO RESPONSE - send greeting immediately
+        ncco = create_greeting_ncco_with_recording(conversation_uuid)
         
-        print(f"✅ Returning FULL IVR MENU NCCO for call {call_uuid}")
+        print(f"✅ Returning NCCO for call {call_uuid}")
         return jsonify(ncco)
         
     except Exception as e:
