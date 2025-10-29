@@ -96,6 +96,28 @@ IVR_MENU = {
 # Session storage (in production, use Redis or database)
 call_sessions = {}
 
+def format_price_for_speech(text):
+    """
+    Format prices in text to be spoken naturally by TTS.
+    Converts "$65/hour" to "65 dollars per hour"
+    Converts "$395" to "395 dollars"
+    """
+    import re
+    
+    # Replace patterns like "$65/hour" with "65 dollars per hour"
+    text = re.sub(r'\$(\d+)/?hour', r'\1 dollars per hour', text)
+    
+    # Replace patterns like "$65-80" with "65 to 80 dollars"
+    text = re.sub(r'\$(\d+)-(\d+)', r'\1 to \2 dollars', text)
+    
+    # Replace standalone prices like "$395" with "395 dollars"
+    text = re.sub(r'\$(\d+)', r'\1 dollars', text)
+    
+    # Replace "hour" with "per hour" where needed
+    text = re.sub(r'(\d+) dollars hour', r'\1 dollars per hour', text)
+    
+    return text
+
 # Debug storage for last DTMF input
 last_dtmf_debug = {
     'timestamp': None,
@@ -608,6 +630,7 @@ def handle_intent(nlu_result, session):
             if 'proposed_booking' in session['context']:
                 booking = session['context']['proposed_booking']
                 response_text = f"Just to confirm, would you like me to book {booking['service_type'].replace('_', ' ')} for {booking['date_time']} at ${booking['total_cost']}? Please say yes or no."
+                response_text = format_price_for_speech(response_text)
                 return create_speech_input_ncco(response_text, 'booking_confirmation')
     
     # Handle primary intents
@@ -636,7 +659,10 @@ def handle_pricing_inquiry(entities, session):
     
     pricing_info = pricing_engine.get_pricing_info(service_type, time_period)
     
-    response_text = f"For {service_type} rentals, our pricing is as follows: {pricing_info['description']}. Would you like to check availability or make a booking?"
+    # Format prices naturally for TTS (convert "$65/hour" to "65 dollars per hour")
+    description = format_price_for_speech(pricing_info['description'])
+    
+    response_text = f"For {service_type} rentals, our pricing is as follows: {description}. Would you like to check availability or make a booking?"
     
     return create_speech_input_ncco(response_text, 'pricing_followup')
 
@@ -654,6 +680,7 @@ def handle_availability_inquiry(entities, session):
     
     if availability['available']:
         response_text = f"Great news! We have availability on {date_time} for {service_type}. The rate would be ${availability['rate']} per hour. Would you like to make a booking?"
+        response_text = format_price_for_speech(response_text)
         session['context']['proposed_booking'] = {
             'date_time': date_time,
             'service_type': service_type,
@@ -701,6 +728,7 @@ def handle_booking_request(entities, session):
             session['outcome'] = 'booking_success'
             session['intent'] = 'booking'
             response_text = f"Perfect! I've reserved {booking_details['service_type'].replace('_', ' ')} for {booking_details['date_time']} at ${booking_details['rate']} per hour. Your booking confirmation is {booking_result['booking_id']}. You'll receive a confirmation text shortly. Is there anything else I can help you with?"
+            response_text = format_price_for_speech(response_text)
             return create_speech_input_ncco(response_text, 'booking_complete')
         else:
             # Track failed booking
@@ -732,6 +760,7 @@ def handle_booking_request(entities, session):
             }
             
             response_text = f"Great! I can book a {service_type.replace('_', ' ')} court for {date_time} at ${availability['rate']} per hour for {duration} hour(s). That's a total of ${availability['total_cost']}. Shall I go ahead and reserve that for you?"
+            response_text = format_price_for_speech(response_text)
             session['state'] = 'booking_confirmation'
             return create_speech_input_ncco(response_text, 'booking_confirmation')
         else:
@@ -841,12 +870,13 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
     print(f"==================================\n")
     
     # Return NCCO with talk and input actions
+    # IMPORTANT: Enable barge-in so customers can press buttons during menu playback
     return [
         {
             "action": "talk",
             "text": full_text,
             "voiceName": "Amy",
-            "bargeIn": False  # User must wait for greeting to complete
+            "bargeIn": True  # Allow customer to interrupt by pressing a button
         },
         {
             "action": "input",
