@@ -1433,16 +1433,33 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
     # No need to append anything!
     full_text = full_greeting
     
-    print(f"\n===== IVR MENU NCCO (TTS) =====")
-    print(f"Text: {full_text}")
-    print(f"==================================\n")
-    
-    ncco = [{
-        "action": "talk",
-        "text": full_text,
-        "voiceName": "Amy",
-        "bargeIn": True
-    }]
+    # CRITICAL: Check if we should use audio or TTS
+    if use_audio and audio_url:
+        # Build full S3 URL for audio
+        s3_bucket_url = os.getenv('S3_BUCKET_URL', 'https://abacus-prod-uploaded-files.s3.us-west-2.amazonaws.com')
+        full_audio_url = f"{s3_bucket_url}/{audio_url}"
+        
+        print(f"\n===== IVR MENU NCCO (AUDIO) =====")
+        print(f"Audio URL: {full_audio_url}")
+        print(f"==================================\n")
+        
+        ncco = [{
+            "action": "stream",
+            "streamUrl": [full_audio_url],
+            "bargeIn": True
+        }]
+    else:
+        # Use TTS
+        print(f"\n===== IVR MENU NCCO (TTS) =====")
+        print(f"Text: {full_text}")
+        print(f"==================================\n")
+        
+        ncco = [{
+            "action": "talk",
+            "text": full_text,
+            "voiceName": "Amy",
+            "bargeIn": True
+        }]
     
     # Add DTMF input
     ncco.append({
@@ -1461,20 +1478,38 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
 def create_department_greeting_ncco(menu_option):
     """Create department-specific greeting after menu selection."""
     greeting_text = menu_option.get('greeting', menu_option.get('departmentGreeting', ''))
+    use_audio = menu_option.get('useAudio', False)
+    audio_url = menu_option.get('audioUrl', None)
     
-    # ALWAYS use TTS for now (audio will be fixed later)
-    # This ensures customers HEAR something instead of silence
-    print(f"\n===== DEPARTMENT GREETING (TTS) =====")
-    print(f"Department: {menu_option.get('optionName')}")
-    print(f"Text: {greeting_text}")
-    print(f"==================================\n")
-    
-    ncco = [{
-        "action": "talk",
-        "text": greeting_text,
-        "voiceName": "Amy",
-        "bargeIn": True
-    }]
+    # Check if we should use audio or TTS
+    if use_audio and audio_url:
+        # Build full S3 URL for audio
+        s3_bucket_url = os.getenv('S3_BUCKET_URL', 'https://abacus-prod-uploaded-files.s3.us-west-2.amazonaws.com')
+        full_audio_url = f"{s3_bucket_url}/{audio_url}"
+        
+        print(f"\n===== DEPARTMENT GREETING (AUDIO) =====")
+        print(f"Department: {menu_option.get('optionName')}")
+        print(f"Audio URL: {full_audio_url}")
+        print(f"==================================\n")
+        
+        ncco = [{
+            "action": "stream",
+            "streamUrl": [full_audio_url],
+            "bargeIn": True
+        }]
+    else:
+        # Use TTS
+        print(f"\n===== DEPARTMENT GREETING (TTS) =====")
+        print(f"Department: {menu_option.get('optionName')}")
+        print(f"Text: {greeting_text}")
+        print(f"==================================\n")
+        
+        ncco = [{
+            "action": "talk",
+            "text": greeting_text,
+            "voiceName": "Amy",
+            "bargeIn": True
+        }]
     
     # Add speech input
     ncco.append({
