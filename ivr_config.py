@@ -21,7 +21,7 @@ _ivr_cache = {
     'timestamp': 0
 }
 
-CACHE_TTL = 300  # Cache for 5 minutes
+CACHE_TTL = 10  # Cache for 10 seconds (temporary for testing)
 
 def get_default_ivr_settings() -> Dict:
     """
