@@ -1483,28 +1483,53 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
 
 def create_department_greeting_ncco(menu_option):
     """Create department-specific greeting after menu selection."""
-    greeting_text = menu_option['greeting']
+    greeting_text = menu_option.get('greeting', menu_option.get('departmentGreeting', ''))
+    use_audio = menu_option.get('useAudio', False)
+    audio_url = menu_option.get('audioUrl', None)
     
-    return [
-        {
+    ncco = []
+    
+    # Use audio if configured, otherwise use text-to-speech
+    if use_audio and audio_url:
+        full_audio_url = construct_audio_url(audio_url)
+        print(f"\n===== DEPARTMENT GREETING (AUDIO) =====")
+        print(f"Department: {menu_option.get('optionName')}")
+        print(f"Streaming audio: {full_audio_url}")
+        print(f"==================================\n")
+        
+        ncco.append({
+            "action": "stream",
+            "streamUrl": [full_audio_url],
+            "bargeIn": True
+        })
+    else:
+        print(f"\n===== DEPARTMENT GREETING (TTS) =====")
+        print(f"Department: {menu_option.get('optionName')}")
+        print(f"Text: {greeting_text}")
+        print(f"==================================\n")
+        
+        ncco.append({
             "action": "talk",
             "text": greeting_text,
             "voiceName": "Amy",
             "bargeIn": True
-        },
-        {
-            "action": "input",
-            "eventUrl": [f"{BASE_URL}/webhooks/speech"],
-            "type": ["speech"],
-            "speech": {
-                "endOnSilence": 3,
-                "language": "en-US",
-                "context": ["sports", "basketball", "booking", "rental", "party", "price", "availability"],
-                "startTimeout": 10,
-                "maxDuration": 60  # Increased to allow longer customer responses during booking
-            }
+        })
+    
+    # Add speech input
+    ncco.append({
+        "action": "input",
+        "eventUrl": [f"{BASE_URL}/webhooks/speech"],
+        "type": ["speech"],
+        "speech": {
+            "endOnSilence": 3,
+            "language": "en-US",
+            "context": ["sports", "basketball", "booking", "rental", "party", "price", "availability"],
+            "startTimeout": 10,
+            "maxDuration": 60  # Increased to allow longer customer responses during booking
         }
-    ]
+    })
+    
+    return ncco
 
 def create_transfer_ncco():
     """Create NCCO to transfer to a live operator."""
