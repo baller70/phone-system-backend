@@ -472,6 +472,15 @@ def test_database():
             'type': type(e).__name__
         }), 500
 
+@app.route('/webhooks', methods=['GET', 'POST'])
+def webhooks_fallback():
+    """
+    Fallback endpoint for incorrect Vonage configuration.
+    Redirects to the proper answer_call() handler.
+    """
+    print("⚠️  WARNING: /webhooks endpoint hit - Vonage Answer URL should be /webhooks/answer")
+    return answer_call()
+
 @app.route('/webhooks/answer', methods=['GET', 'POST'])
 def answer_call():
     """
