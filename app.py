@@ -104,18 +104,27 @@ def format_price_for_speech(text):
     """
     import re
     
-    # Replace patterns like "$65/hour" with "65 dollars per hour"
-    text = re.sub(r'\$(\d+)/?hour', r'\1 dollars per hour', text)
+    # Order matters! Most specific patterns first
     
-    # Replace patterns like "$65-80" with "65 to 80 dollars"
-    text = re.sub(r'\$(\d+)-(\d+)', r'\1 to \2 dollars', text)
+    # Pattern 1: "$65/hour" or "$65 per hour" → "65 dollars per hour"
+    text = re.sub(r'\$(\d+)\s*/?per\s*hour', r'\1 dollars per hour', text, flags=re.IGNORECASE)
+    text = re.sub(r'\$(\d+)\s*/\s*hour', r'\1 dollars per hour', text, flags=re.IGNORECASE)
     
-    # Replace standalone prices like "$395" with "395 dollars"
+    # Pattern 2: "$65-80" or "$65 to $80" → "65 to 80 dollars"
+    text = re.sub(r'\$(\d+)\s*-\s*\$?(\d+)', r'\1 to \2 dollars', text)
+    text = re.sub(r'\$(\d+)\s+to\s+\$(\d+)', r'\1 to \2 dollars', text)
+    
+    # Pattern 3: "$65-80/hour" → "65 to 80 dollars per hour"
+    text = re.sub(r'\$(\d+)\s*-\s*\$?(\d+)\s*/?per\s*hour', r'\1 to \2 dollars per hour', text, flags=re.IGNORECASE)
+    text = re.sub(r'\$(\d+)\s*-\s*\$?(\d+)\s*/\s*hour', r'\1 to \2 dollars per hour', text, flags=re.IGNORECASE)
+    
+    # Pattern 4: Standalone prices like "$395" or "$65" → "395 dollars" or "65 dollars"
     text = re.sub(r'\$(\d+)', r'\1 dollars', text)
     
-    # Replace "hour" with "per hour" where needed
-    text = re.sub(r'(\d+) dollars hour', r'\1 dollars per hour', text)
+    # Cleanup: Fix any double "dollars dollars"
+    text = re.sub(r'(\d+)\s+dollars\s+dollars', r'\1 dollars', text)
     
+    print(f"[PRICE FORMAT] Converted: {text}")
     return text
 
 # Debug storage for last DTMF input
@@ -456,15 +465,19 @@ def handle_dtmf():
             
             # Set context
             session['context']['service_type'] = option['intent']
+            session['state'] = 'collect_name'  # Start with name collection
             
-            # Return department greeting and speech input
+            # Return department greeting and ask for name
             department_greeting = option['greeting']
-            print(f"Returning greeting: {department_greeting}")
+            name_request = "Before we begin, may I have your name please?"
+            full_greeting = f"{department_greeting} {name_request}"
+            
+            print(f"Returning greeting with name request: {full_greeting}")
             
             ncco = [
                 {
                     "action": "talk",
-                    "text": department_greeting,
+                    "text": full_greeting,
                     "voiceName": "Amy",
                     "bargeIn": True
                 },
@@ -473,11 +486,11 @@ def handle_dtmf():
                     "eventUrl": [f"{BASE_URL}/webhooks/speech"],
                     "type": ["speech"],
                     "speech": {
-                        "endOnSilence": 3,
+                        "endOnSilence": 2,
                         "language": "en-US",
-                        "context": ["sports", "basketball", "booking", "rental", "party", "price", "availability"],
-                        "startTimeout": 10,
-                        "maxDuration": 60  # Increased to allow longer customer responses during booking
+                        "context": ["name", "firstname", "lastname"],
+                        "startTimeout": 8,
+                        "maxDuration": 10  # Short duration for name
                     }
                 }
             ]
@@ -605,6 +618,71 @@ def handle_intent(nlu_result, session):
     current_state = session.get('state', '')
     
     print(f"Intent: {intent}, State: {current_state}, Entities: {entities}")
+    
+    # Handle name collection (FIRST PRIORITY)
+    if current_state == 'collect_name':
+        # Extract name from speech
+        speech_text = session.get('last_speech', '')
+        # Store the name (simple extraction - user said their name)
+        session['customer_name'] = speech_text.strip()
+        session['state'] = 'collect_email'
+        
+        response_text = f"Thank you! And what's your email address?"
+        print(f"Collected name: {session['customer_name']}, asking for email")
+        
+        return [
+            {
+                "action": "talk",
+                "text": response_text,
+                "voiceName": "Amy",
+                "bargeIn": True
+            },
+            {
+                "action": "input",
+                "eventUrl": [f"{BASE_URL}/webhooks/speech"],
+                "type": ["speech"],
+                "speech": {
+                    "endOnSilence": 2,
+                    "language": "en-US",
+                    "context": ["email", "address", "@"],
+                    "startTimeout": 8,
+                    "maxDuration": 15  # Longer for email
+                }
+            }
+        ]
+    
+    # Handle email collection (SECOND PRIORITY)
+    if current_state == 'collect_email':
+        # Extract email from speech
+        speech_text = session.get('last_speech', '')
+        # Store the email (will need parsing)
+        session['customer_email'] = speech_text.strip()
+        session['state'] = 'ready'  # Now ready for main conversation
+        
+        customer_name = session.get('customer_name', 'there')
+        response_text = f"Perfect! Thanks {customer_name}. How may I help you today?"
+        print(f"Collected email: {session['customer_email']}, ready for conversation")
+        
+        return [
+            {
+                "action": "talk",
+                "text": response_text,
+                "voiceName": "Amy",
+                "bargeIn": True
+            },
+            {
+                "action": "input",
+                "eventUrl": [f"{BASE_URL}/webhooks/speech"],
+                "type": ["speech"],
+                "speech": {
+                    "endOnSilence": 3,
+                    "language": "en-US",
+                    "context": ["sports", "basketball", "booking", "rental", "party", "price", "availability"],
+                    "startTimeout": 10,
+                    "maxDuration": 60
+                }
+            }
+        ]
     
     # Handle context-aware responses
     # If we're waiting for specific info and user provides it, continue the booking flow
