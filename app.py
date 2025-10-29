@@ -1434,7 +1434,10 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
     full_text = full_greeting
     
     # CRITICAL: Check if we should use audio or TTS
-    if use_audio and audio_url:
+    # ALWAYS fall back to TTS for now since audio files don't exist yet
+    use_tts_fallback = True  # Force TTS until audio files are uploaded to S3
+    
+    if use_audio and audio_url and not use_tts_fallback:
         # Build full S3 URL for audio
         s3_bucket_url = os.getenv('S3_BUCKET_URL', 'https://abacus-prod-uploaded-files.s3.us-west-2.amazonaws.com')
         full_audio_url = f"{s3_bucket_url}/{audio_url}"
@@ -1449,7 +1452,10 @@ def create_ivr_menu_ncco(replay=False, invalid=False):
             "bargeIn": True
         }]
     else:
-        # Use TTS
+        # Use TTS (either by choice or as fallback)
+        if use_audio and audio_url:
+            print(f"⚠ Audio configured but using TTS fallback (audio files not yet uploaded)")
+        
         print(f"\n===== IVR MENU NCCO (TTS) =====")
         print(f"Text: {full_text}")
         print(f"==================================\n")
@@ -1481,8 +1487,11 @@ def create_department_greeting_ncco(menu_option):
     use_audio = menu_option.get('useAudio', False)
     audio_url = menu_option.get('audioUrl', None)
     
+    # CRITICAL: Force TTS fallback until audio files are uploaded to S3
+    use_tts_fallback = True
+    
     # Check if we should use audio or TTS
-    if use_audio and audio_url:
+    if use_audio and audio_url and not use_tts_fallback:
         # Build full S3 URL for audio
         s3_bucket_url = os.getenv('S3_BUCKET_URL', 'https://abacus-prod-uploaded-files.s3.us-west-2.amazonaws.com')
         full_audio_url = f"{s3_bucket_url}/{audio_url}"
@@ -1498,7 +1507,10 @@ def create_department_greeting_ncco(menu_option):
             "bargeIn": True
         }]
     else:
-        # Use TTS
+        # Use TTS (either by choice or as fallback)
+        if use_audio and audio_url:
+            print(f"⚠ Audio configured for {menu_option.get('optionName')} but using TTS fallback")
+        
         print(f"\n===== DEPARTMENT GREETING (TTS) =====")
         print(f"Department: {menu_option.get('optionName')}")
         print(f"Text: {greeting_text}")
