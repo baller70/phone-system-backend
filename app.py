@@ -213,22 +213,27 @@ def answer_call():
         
         conversation_uuid = call_data.get('conversation_uuid', '')
         from_number = call_data.get('from', '')
+        call_uuid = call_data.get('uuid', '')
         
         # Initialize session
         call_sessions[conversation_uuid] = {
             'from_number': from_number,
+            'call_uuid': call_uuid,
             'state': 'greeting',
             'context': {},
-            'start_time': datetime.now()
+            'start_time': datetime.now(),
+            'conversation_transcript': []  # Track conversation for transcription
         }
+        
+        print(f"📞 New call from {from_number} - UUID: {call_uuid}")
         
         # Check business hours
         current_hour = datetime.now().hour
         if current_hour < BUSINESS_HOURS['start'] or current_hour >= BUSINESS_HOURS['end']:
             return jsonify(create_after_hours_ncco())
         
-        # Create greeting NCCO
-        ncco = create_greeting_ncco()
+        # Create greeting NCCO with recording enabled
+        ncco = create_greeting_ncco_with_recording(conversation_uuid)
         return jsonify(ncco)
         
     except Exception as e:
@@ -296,20 +301,28 @@ def handle_events():
             # Estimate call cost (Vonage charges approximately $0.007 per minute)
             cost = (duration / 60) * 0.007 if duration > 0 else 0.0
             
+            # Get recording URL and transcription from session (if available)
+            recording_url = session.get('recording_url') or event_data.get('recording_url')
+            transcription = session.get('transcription')
+            
             # Log to dashboard database
             try:
-                database.log_call_to_dashboard(
+                call_log_id = database.log_call_to_dashboard(
                     caller_id=from_number or 'unknown',
                     caller_name=session.get('caller_name', 'Unknown'),
                     duration=int(duration) if duration else 0,
                     intent=intent,
                     outcome=outcome,
-                    recording_url=event_data.get('recording_url'),
-                    transcription=None,  # Not available yet
+                    recording_url=recording_url,
+                    transcription=transcription,
                     notes=notes,
                     cost=round(cost, 4)
                 )
-                print(f"✓ Call logged to dashboard: {from_number} - {intent} - {outcome}")
+                print(f"✓ Call logged to dashboard (ID: {call_log_id}): {from_number} - {intent} - {outcome}")
+                
+                # Store call log ID in session for later updates (recording/transcription)
+                if call_log_id and conversation_uuid in call_sessions:
+                    call_sessions[conversation_uuid]['call_log_id'] = call_log_id
             except Exception as log_error:
                 print(f"Warning: Failed to log call to dashboard: {log_error}")
             
@@ -321,6 +334,76 @@ def handle_events():
     except Exception as e:
         print(f"Error handling event: {e}")
         return jsonify({'status': 'error'})
+
+@app.route('/webhooks/recording', methods=['POST'])
+def handle_recording():
+    """Handle recording completion webhook from Vonage."""
+    try:
+        recording_data = request.get_json() or {}
+        
+        print(f"\n🎙️ Recording webhook received:")
+        print(f"Data: {json.dumps(recording_data, indent=2)}")
+        
+        recording_url = recording_data.get('recording_url')
+        conversation_uuid = recording_data.get('conversation_uuid')
+        call_uuid = recording_data.get('call_uuid')
+        
+        if recording_url and conversation_uuid:
+            # Try to update via session first (if call is still active)
+            if conversation_uuid in call_sessions:
+                call_sessions[conversation_uuid]['recording_url'] = recording_url
+                
+                # If we have a call_log_id, update the database immediately
+                call_log_id = call_sessions[conversation_uuid].get('call_log_id')
+                if call_log_id:
+                    database.update_call_recording(call_log_id, recording_url)
+                
+                print(f"✓ Recording URL stored for conversation {conversation_uuid}")
+            else:
+                # Session has been cleaned up, recording arrived after call ended
+                # This is normal behavior - recordings can take a few seconds to process
+                print(f"⚠️ Session not found (call already ended), recording will be in next update")
+                # Note: The recording may already be in the call log if the event came before cleanup
+                
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        print(f"Error handling recording webhook: {e}")
+        return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/webhooks/transcription', methods=['POST'])
+def handle_transcription():
+    """Handle transcription completion webhook from Vonage."""
+    try:
+        transcription_data = request.get_json() or {}
+        
+        print(f"\n📝 Transcription webhook received:")
+        print(f"Data: {json.dumps(transcription_data, indent=2)}")
+        
+        transcript = transcription_data.get('text') or transcription_data.get('transcript')
+        conversation_uuid = transcription_data.get('conversation_uuid')
+        call_uuid = transcription_data.get('call_uuid')
+        
+        if transcript and conversation_uuid:
+            # Try to update via session first (if call is still active)
+            if conversation_uuid in call_sessions:
+                call_sessions[conversation_uuid]['transcription'] = transcript
+                
+                # If we have a call_log_id, update the database immediately
+                call_log_id = call_sessions[conversation_uuid].get('call_log_id')
+                if call_log_id:
+                    database.update_call_transcription(call_log_id, transcript)
+                
+                print(f"✓ Transcription stored for conversation {conversation_uuid}")
+            else:
+                # Session has been cleaned up, transcription arrived after call ended
+                # This is normal - transcriptions can take time to process
+                print(f"⚠️ Session not found (call already ended), transcription processing delayed")
+                # Note: The transcription may already be in the call log if it came before cleanup
+                
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        print(f"Error handling transcription webhook: {e}")
+        return jsonify({'status': 'error', 'message': str(e)})
 
 @app.route('/webhooks/dtmf', methods=['GET', 'POST'])
 def handle_dtmf():
@@ -904,6 +987,32 @@ def handle_general_info(entities, session):
 def create_greeting_ncco():
     """Create initial greeting NCCO with IVR menu."""
     return create_ivr_menu_ncco()
+
+def create_greeting_ncco_with_recording(conversation_uuid):
+    """Create initial greeting NCCO with call recording enabled."""
+    # Start with recording action
+    ncco = [{
+        "action": "record",
+        "eventUrl": [f"{BASE_URL}/webhooks/recording"],
+        "eventMethod": "POST",
+        "format": "mp3",
+        "split": "conversation",
+        "channels": 2,
+        "endOnSilence": 3,
+        "endOnKey": "#",
+        "timeOut": 7200,  # 2 hours max
+        "beepStart": False,  # No beep at start
+        "transcription": {
+            "language": "en-US",
+            "eventUrl": [f"{BASE_URL}/webhooks/transcription"],
+            "eventMethod": "POST"
+        }
+    }]
+    
+    # Add the IVR menu
+    ncco.extend(create_ivr_menu_ncco())
+    
+    return ncco
 
 def create_ivr_menu_ncco(replay=False, invalid=False):
     """Create IVR menu NCCO with DTMF input options - pulls from dashboard."""

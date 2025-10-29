@@ -91,6 +91,68 @@ def get_recent_calls(limit: int = 10):
         print(f"Failed to fetch recent calls: {e}")
         return []
 
+def update_call_recording(call_log_id: str, recording_url: str):
+    """
+    Update an existing call log with the recording URL.
+    
+    Args:
+        call_log_id: The ID of the call log to update
+        recording_url: URL to the call recording
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        url = f"{DASHBOARD_API_URL}/api/call-logs/{call_log_id}"
+        payload = {"recordingUrl": recording_url}
+        headers = {
+            "Content-Type": "application/json",
+            "X-API-Key": DASHBOARD_API_KEY
+        }
+        
+        response = requests.patch(url, json=payload, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            print(f"✓ Call log {call_log_id} updated with recording URL")
+            return True
+        else:
+            print(f"Failed to update recording: HTTP {response.status_code} - {response.text}")
+            return False
+    except Exception as e:
+        print(f"Failed to update call recording: {e}")
+        return False
+
+def update_call_transcription(call_log_id: str, transcription: str):
+    """
+    Update an existing call log with the transcription.
+    
+    Args:
+        call_log_id: The ID of the call log to update
+        transcription: Full call transcription text
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        url = f"{DASHBOARD_API_URL}/api/call-logs/{call_log_id}"
+        payload = {"transcription": transcription}
+        headers = {
+            "Content-Type": "application/json",
+            "X-API-Key": DASHBOARD_API_KEY
+        }
+        
+        response = requests.patch(url, json=payload, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            print(f"✓ Call log {call_log_id} updated with transcription")
+            return True
+        else:
+            print(f"Failed to update transcription: HTTP {response.status_code} - {response.text}")
+            return False
+    except Exception as e:
+        print(f"Failed to update call transcription: {e}")
+        return False
+
 def test_dashboard_connection():
     """Test the dashboard API connection by creating a test call log."""
     try:
