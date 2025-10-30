@@ -1805,6 +1805,61 @@ def debug_ivr_settings():
             'error': str(e)
         }), 500
 
+@app.route('/audio/azure/<filename>', methods=['GET'])
+def serve_azure_audio(filename):
+    """Serve Azure TTS generated audio files for Vonage streaming"""
+    try:
+        from azure_tts_service import azure_tts
+        from flask import send_file
+        
+        # Security: Only allow .mp3 files
+        if not filename.endswith('.mp3'):
+            return jsonify({'error': 'Invalid file type'}), 400
+        
+        # Get audio file path
+        audio_path = os.path.join(azure_tts.cache_dir, filename)
+        
+        if not os.path.exists(audio_path):
+            logger.error(f"Audio file not found: {audio_path}")
+            return jsonify({'error': 'Audio file not found'}), 404
+        
+        logger.info(f"✅ Serving Azure TTS audio: {filename}")
+        
+        # Serve the audio file
+        return send_file(
+            audio_path,
+            mimetype='audio/mpeg',
+            as_attachment=False,
+            download_name=filename
+        )
+        
+    except Exception as e:
+        logger.error(f"Error serving Azure audio: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/test/azure-tts', methods=['GET'])
+def test_azure_tts():
+    """Test Azure TTS service"""
+    try:
+        from azure_tts_helper import test_azure_service, get_voice_info
+        
+        test_result = test_azure_service()
+        voices = get_voice_info()
+        
+        return jsonify({
+            'status': 'success',
+            'test_result': test_result,
+            'available_voices': voices
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     debug = os.getenv('FLASK_ENV') == 'development'
