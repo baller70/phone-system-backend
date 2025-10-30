@@ -1079,12 +1079,17 @@ def handle_intent(nlu_result, session):
         # Track AI response
         add_to_conversation_history(session, 'ai', response_text)
         
+        # Calculate speech duration
+        words = len(response_text.split())
+        speech_duration = (words / 2.5) + 1
+        start_timeout = max(8, int(speech_duration) + 2)
+        
         return [
             {
                 "action": "talk",
                 "text": response_text,
                 "voiceName": "Amy",
-                "bargeIn": True
+                "bargeIn": False  # ✅ Let AI finish asking for email
             },
             {
                 "action": "input",
@@ -1094,7 +1099,7 @@ def handle_intent(nlu_result, session):
                     "endOnSilence": 2,
                     "language": "en-US",
                     "context": ["email", "address", "@"],
-                    "startTimeout": 8,
+                    "startTimeout": start_timeout,  # Dynamic timeout
                     "maxDuration": 15  # Longer for email
                 }
             }
@@ -1115,12 +1120,17 @@ def handle_intent(nlu_result, session):
         # Track AI response
         add_to_conversation_history(session, 'ai', response_text)
         
+        # Calculate speech duration
+        words = len(response_text.split())
+        speech_duration = (words / 2.5) + 1
+        start_timeout = max(10, int(speech_duration) + 2)
+        
         return [
             {
                 "action": "talk",
                 "text": response_text,
                 "voiceName": "Amy",
-                "bargeIn": True
+                "bargeIn": False  # ✅ Let AI finish greeting
             },
             {
                 "action": "input",
@@ -1130,7 +1140,7 @@ def handle_intent(nlu_result, session):
                     "endOnSilence": 3,
                     "language": "en-US",
                     "context": ["sports", "basketball", "booking", "rental", "party", "price", "availability"],
-                    "startTimeout": 10,
+                    "startTimeout": start_timeout,  # Dynamic timeout
                     "maxDuration": 60
                 }
             }
@@ -1612,13 +1622,25 @@ def create_transfer_ncco():
     ]
 
 def create_speech_input_ncco(text, context_state):
-    """Create NCCO for speech input with custom text."""
+    """Create NCCO for speech input with custom text.
+    
+    CRITICAL FIX: bargeIn set to False to prevent AI from being cut off mid-sentence.
+    Dynamic timeout calculation ensures AI finishes speaking before listening for input.
+    """
+    # Calculate speech duration to prevent cutoff
+    # Amy (Vonage TTS) speaks at ~150 words/minute = 2.5 words/second
+    words = len(text.split())
+    speech_duration = (words / 2.5) + 1  # Add 1 second buffer
+    
+    # Calculate appropriate timeout (minimum 10 seconds, or speech duration + 2 seconds)
+    start_timeout = max(10, int(speech_duration) + 2)
+    
     return [
         {
             "action": "talk",
             "text": text,
             "voiceName": "Amy",
-            "bargeIn": True
+            "bargeIn": False  # ✅ CRITICAL: Prevent customer/noise from interrupting AI mid-sentence
         },
         {
             "action": "input",
@@ -1628,7 +1650,7 @@ def create_speech_input_ncco(text, context_state):
                 "endOnSilence": 3,
                 "language": "en-US",
                 "context": ["sports", "basketball", "booking", "rental", "party", "yes", "no"],
-                "startTimeout": 10,  # Increased to allow full message to complete
+                "startTimeout": start_timeout,  # Dynamic timeout based on message length
                 "maxDuration": 60  # Increased to allow longer customer conversations during booking
             }
         }
@@ -1664,13 +1686,23 @@ def create_error_ncco():
     ]
 
 def create_clarification_ncco():
-    """Create NCCO when we need clarification."""
+    """Create NCCO when we need clarification.
+    
+    CRITICAL FIX: bargeIn set to False with dynamic timeout to prevent cutoff.
+    """
+    text = "I'm not sure I understood that. Are you looking for pricing information, checking availability, or wanting to make a booking? You can also ask about our services or hours."
+    
+    # Calculate speech duration
+    words = len(text.split())
+    speech_duration = (words / 2.5) + 1
+    start_timeout = max(10, int(speech_duration) + 2)
+    
     return [
         {
             "action": "talk",
-            "text": "I'm not sure I understood that. Are you looking for pricing information, checking availability, or wanting to make a booking? You can also ask about our services or hours.",
+            "text": text,
             "voiceName": "Amy",
-            "bargeIn": True
+            "bargeIn": False  # ✅ CRITICAL: Let AI finish speaking
         },
         {
             "action": "input",
@@ -1680,7 +1712,7 @@ def create_clarification_ncco():
                 "endOnSilence": 3,
                 "language": "en-US",
                 "context": ["pricing", "availability", "booking", "services", "hours"],
-                "startTimeout": 10,
+                "startTimeout": start_timeout,  # Dynamic timeout
                 "maxDuration": 60  # Increased to allow longer customer responses
             }
         }
