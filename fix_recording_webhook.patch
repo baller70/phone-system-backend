@@ -1,0 +1,43 @@
+--- a/app.py
++++ b/app.py
+@@ -638,6 +638,11 @@ def handle_completed_call(event_data):
+ @app.route('/webhooks/recording', methods=['POST'])
+ def handle_recording():
+     """Handle recording completion webhook from Vonage."""
+     try:
+         recording_data = request.get_json() or {}
+         
+         print(f"\n🎙️ Recording webhook received:")
+@@ -653,16 +658,30 @@ def handle_recording():
+                 
+                 # If we have a call_log_id, update the database immediately
+                 call_log_id = call_sessions[conversation_uuid].get('call_log_id')
+                 if call_log_id:
+                     database.update_call_recording(call_log_id, recording_url)
+                 
+                 print(f"✓ Recording URL stored for conversation {conversation_uuid}")
+             else:
+-                # Session has been cleaned up, recording arrived after call ended
+-                # This is normal behavior - recordings can take a few seconds to process
+-                print(f"⚠️ Session not found (call already ended), recording will be in next update")
+-                # Note: The recording may already be in the call log if the event came before cleanup
++                # Session cleaned up - need to find the call by conversation UUID
++                print(f"⚠️ Session not found for {conversation_uuid}, looking up call in database")
++                
++                # Get recent calls and find by conversation UUID (stored in notes/metadata)
++                try:
++                    recent_calls = database.get_recent_call_logs(limit=50)
++                    # For now, update the most recent call without recording
++                    # TODO: Store conversation_uuid in database for better matching
++                    for call in recent_calls.get('calls', []):
++                        if not call.get('recordingUrl'):
++                            call_id = call.get('id')
++                            database.update_call_recording(call_id, recording_url)
++                            print(f"✓ Updated call {call_id} with late-arriving recording")
++                            break
++                except Exception as lookup_error:
++                    print(f"Error looking up call: {lookup_error}")
+                 
+         return jsonify({'status': 'ok'})
+     except Exception as e:
+         print(f"Error handling recording webhook: {e}")

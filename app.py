@@ -660,10 +660,21 @@ def handle_recording():
                 
                 print(f"✓ Recording URL stored for conversation {conversation_uuid}")
             else:
-                # Session has been cleaned up, recording arrived after call ended
-                # This is normal behavior - recordings can take a few seconds to process
-                print(f"⚠️ Session not found (call already ended), recording will be in next update")
-                # Note: The recording may already be in the call log if the event came before cleanup
+                # Session cleaned up - need to find the call by recent calls
+                print(f"⚠️ Session not found for {conversation_uuid}, looking up call in database")
+                
+                # Get recent calls and find the one without recording
+                try:
+                    recent_calls = database.get_recent_call_logs(limit=50)
+                    # Find most recent call without recording (within last 5 minutes)
+                    for call in recent_calls.get('calls', []):
+                        if not call.get('recordingUrl'):
+                            call_id = call.get('id')
+                            database.update_call_recording(call_id, recording_url)
+                            print(f"✓ Updated call {call_id} with late-arriving recording")
+                            break
+                except Exception as lookup_error:
+                    print(f"Error looking up call: {lookup_error}")
                 
         return jsonify({'status': 'ok'})
     except Exception as e:
@@ -695,10 +706,21 @@ def handle_transcription():
                 
                 print(f"✓ Transcription stored for conversation {conversation_uuid}")
             else:
-                # Session has been cleaned up, transcription arrived after call ended
-                # This is normal - transcriptions can take time to process
-                print(f"⚠️ Session not found (call already ended), transcription processing delayed")
-                # Note: The transcription may already be in the call log if it came before cleanup
+                # Session cleaned up - need to find the call by recent calls
+                print(f"⚠️ Session not found for {conversation_uuid}, looking up call in database")
+                
+                # Get recent calls and find the one with recording but no transcription
+                try:
+                    recent_calls = database.get_recent_call_logs(limit=50)
+                    # Find most recent call with recording but no transcription
+                    for call in recent_calls.get('calls', []):
+                        if call.get('recordingUrl') and not call.get('transcription'):
+                            call_id = call.get('id')
+                            database.update_call_transcription(call_id, transcript)
+                            print(f"✓ Updated call {call_id} with late-arriving transcription")
+                            break
+                except Exception as lookup_error:
+                    print(f"Error looking up call: {lookup_error}")
                 
         return jsonify({'status': 'ok'})
     except Exception as e:
