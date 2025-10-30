@@ -18,6 +18,10 @@ from knowledge_base import KnowledgeBase
 import ivr_config
 import database
 import requests
+from thoughtly_client import ThoughtlyClient
+from thoughtly_usage_tracker import ThoughtlyUsageTracker
+from thoughtly_webhook_handler import ThoughtlyWebhookHandler
+from vonage_router import VonageRouter
 
 # Load environment variables
 load_dotenv()
@@ -33,6 +37,28 @@ calendar_helper = CalcomCalendarHelper()
 pricing_engine = PricingEngine()
 escalation_handler = EscalationHandler()
 knowledge_base = KnowledgeBase()
+
+# Initialize Thoughtly components
+try:
+    thoughtly_api_key = os.getenv('THOUGHTLY_API_KEY')
+    if thoughtly_api_key:
+        thoughtly_client = ThoughtlyClient(thoughtly_api_key)
+        thoughtly_usage_tracker = ThoughtlyUsageTracker()
+        thoughtly_webhook_handler = ThoughtlyWebhookHandler(thoughtly_usage_tracker)
+        vonage_router = VonageRouter(thoughtly_usage_tracker)
+        print("✓ Thoughtly integration initialized successfully")
+    else:
+        print("Warning: THOUGHTLY_API_KEY not found, Thoughtly features disabled")
+        thoughtly_client = None
+        thoughtly_usage_tracker = None
+        thoughtly_webhook_handler = None
+        vonage_router = None
+except Exception as e:
+    print(f"Warning: Thoughtly initialization failed: {e}")
+    thoughtly_client = None
+    thoughtly_usage_tracker = None
+    thoughtly_webhook_handler = None
+    vonage_router = None
 
 # Initialize Vonage client
 try:
@@ -488,6 +514,7 @@ def answer_call():
     Returns NCCO (Nexmo Call Control Object) to control call flow.
     
     OPTIMIZED FOR INSTANT RESPONSE - NO DELAYS!
+    INCLUDES SMART ROUTING: Thoughtly (0-300 min/month) or Azure (301+ min)
     """
     try:
         # INSTANT EXTRACTION - minimal processing
@@ -502,6 +529,16 @@ def answer_call():
         
         print(f"📞 INCOMING CALL from {from_number}")
         
+        # SMART ROUTING: Decide between Thoughtly and Azure
+        provider = 'azure'  # Default to Azure
+        
+        if vonage_router and thoughtly_client:
+            # Get routing decision
+            routing_decision = vonage_router.route_call(conversation_uuid, from_number)
+            provider = routing_decision.get('provider', 'azure')
+            
+            print(f"🔀 ROUTING: {provider.upper()} (usage: {routing_decision.get('usage', {}).get('usage_percentage', 0)}%)")
+        
         # Initialize session (AFTER sending NCCO to avoid any delay)
         call_sessions[conversation_uuid] = {
             'from_number': from_number,
@@ -509,8 +546,14 @@ def answer_call():
             'state': 'greeting',
             'context': {},
             'start_time': datetime.now(),
-            'conversation_transcript': []
+            'conversation_transcript': [],
+            'provider': provider
         }
+        
+        # If routing to Thoughtly, log it (actual Thoughtly routing happens via their dashboard)
+        if provider == 'thoughtly':
+            print(f"✨ Would route to Thoughtly (implement transfer NCCO for full integration)")
+            # TODO: Implement Thoughtly NCCO transfer when configured
         
         # INSTANT NCCO RESPONSE - send FULL IVR MENU immediately
         # Changed from create_greeting_ncco_with_recording() to create_ivr_menu_ncco()
@@ -1858,6 +1901,86 @@ def test_azure_tts():
             'status': 'error',
             'error': str(e)
         }), 500
+
+
+# ====================================
+# THOUGHTLY INTEGRATION ENDPOINTS
+# ====================================
+
+@app.route('/webhooks/thoughtly', methods=['POST'])
+def thoughtly_webhook():
+    """Handle webhooks from Thoughtly"""
+    try:
+        if not thoughtly_webhook_handler:
+            return jsonify({'error': 'Thoughtly integration not configured'}), 503
+        
+        event_data = request.get_json()
+        
+        if not event_data:
+            return jsonify({'error': 'No event data provided'}), 400
+        
+        # Process the webhook
+        result = thoughtly_webhook_handler.process_webhook(event_data)
+        
+        return jsonify(result), 200
+        
+    except Exception as e:
+        print(f"Error processing Thoughtly webhook: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/thoughtly/usage', methods=['GET'])
+def get_thoughtly_usage():
+    """Get current Thoughtly usage statistics"""
+    try:
+        if not thoughtly_usage_tracker:
+            return jsonify({'error': 'Thoughtly integration not configured'}), 503
+        
+        usage = thoughtly_usage_tracker.get_current_usage()
+        savings = thoughtly_usage_tracker.get_cost_savings()
+        
+        return jsonify({
+            'usage': usage,
+            'savings': savings
+        }), 200
+        
+    except Exception as e:
+        print(f"Error getting Thoughtly usage: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/thoughtly/routing-stats', methods=['GET'])
+def get_routing_stats():
+    """Get call routing statistics"""
+    try:
+        if not vonage_router:
+            return jsonify({'error': 'Thoughtly integration not configured'}), 503
+        
+        stats = vonage_router.get_routing_stats()
+        
+        return jsonify(stats), 200
+        
+    except Exception as e:
+        print(f"Error getting routing stats: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/thoughtly/test', methods=['POST'])
+def test_thoughtly():
+    """Test Thoughtly integration"""
+    try:
+        if not thoughtly_client:
+            return jsonify({'error': 'Thoughtly integration not configured'}), 503
+        
+        # Get usage stats from API
+        usage_stats = thoughtly_client.get_usage_stats()
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Thoughtly integration is working',
+            'api_response': usage_stats
+        }), 200
+        
+    except Exception as e:
+        print(f"Error testing Thoughtly: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':
